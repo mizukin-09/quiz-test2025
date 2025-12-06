@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>参加画面</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
+    import {
+      getFirestore,
+      doc,
+      setDoc,
+      getDoc,
+      updateDoc,
+      collection,
+      getDocs,
+      onSnapshot
+    } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDqEcoMwo3BM9g_0MnKCdXDVtfg0qv-bHg",
+      authDomain: "quiz-party2025.firebaseapp.com",
+      projectId: "quiz-party2025",
+      storageBucket: "quiz-party2025.firebasestorage.app",
+      messagingSenderId: "929065994714",
+      appId: "1:929065994714:web:196ebcf0208fd1096b98e3"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    window.firebaseDB = db;
+    window.firebaseFirestoreFuncs = {
+      doc, setDoc, getDoc, updateDoc, collection, getDocs, onSnapshot
+    };
+  </script>
+
+  <script src="script.js" defer></script>
+</head>
+
+<body>
+  <h1>クイズに参加</h1>
+
+  <input id="nameInput" placeholder="ニックネーム" />
+  <button id="joinBtn" onclick="joinGame()">参加する</button>
+
+  <div id="waitingArea" style="display:none;">
+    <h2>待機中…</h2>
+  </div>
+
+  <div id="questionArea" style="display:none;">
+    <h2 id="questionText"></h2>
+    <div id="choices"></div>
+  </div>
+</body>
+</html>
+
+
+
+
+
+
+
+

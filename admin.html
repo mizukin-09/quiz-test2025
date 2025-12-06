@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>司会画面</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
+    import {
+      getFirestore,
+      doc,
+      setDoc,
+      getDoc,
+      updateDoc,
+      onSnapshot
+    } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDqEcoMwo3BM9g_0MnKCdXDVtfg0qv-bHg",
+      authDomain: "quiz-party2025.firebaseapp.com",
+      projectId: "quiz-party2025",
+      storageBucket: "quiz-party2025.firebasestorage.app",
+      messagingSenderId: "929065994714",
+      appId: "1:929065994714:web:196ebcf0208fd1096b98e3"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    window.firebaseDB = db;
+    window.firebaseFirestoreFuncs = {
+      doc, setDoc, getDoc, updateDoc
+    };
+  </script>
+
+  <script src="script.js" defer></script>
+</head>
+
+<body>
+  <h1>司会パネル</h1>
+
+  <button onclick="admin_startQuestion(1)">問題1開始</button>
+  <button onclick="admin_showVotes(1)">問題1 投票数表示</button>
+  <button onclick="admin_reveal(1,1)">問題1 正解発表</button>
+
+  <button onclick="admin_startQuestion(2)">問題2開始</button>
+  <button onclick="admin_showVotes(2)">問題2 投票数表示</button>
+  <button onclick="admin_reveal(2,3)">問題2 正解発表</button>
+
+  <button onclick="admin_startQuestion(3)">問題3開始</button>
+  <button onclick="admin_showVotes(3)">問題3 投票数表示</button>
+  <button onclick="admin_reveal(3,2)">問題3 正解発表</button>
+
+  <button onclick="admin_startQuestion(4)">問題4開始</button>
+  <button onclick="admin_showVotes(4)">問題4 投票数表示</button>
+  <button onclick="admin_reveal(4,4)">問題4 正解発表</button>
+
+  <button onclick="admin_startQuestion(5)">問題5開始</button>
+  <button onclick="admin_showVotes(5)">問題5 投票数表示</button>
+  <button onclick="admin_reveal(5,2)">問題5 正解発表</button>
+
+</body>
+</html>
+
+
+
