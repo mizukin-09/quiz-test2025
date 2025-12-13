@@ -2,6 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>クイズ表示画面</title>
 
   <!-- Firebase (CDN) -->
@@ -54,6 +55,7 @@
       font-family: system-ui, sans-serif;
       padding: 32px;
       color: #111;
+      /* ★背景画像（パスは環境に合わせて変更） */
       background: #000 url("picture_quiz/bg_quiz.png") center center / cover no-repeat fixed;
     }
     #screenQuestionText {
@@ -91,6 +93,7 @@
       background: rgba(255,255,255,0.9);
       padding: 16px;
       border-radius: 8px;
+      display: none;   /* ランキング時以外は script から非表示にする */
     }
     #screenRanking ol {
       padding-left: 24px;
@@ -100,15 +103,16 @@
   <script src="script.js"></script>
 </head>
 <body>
-  <!-- 初期表示は空（待機フェーズで背景だけになる） -->
+  <!-- 初期は何も表示しない（背景のみ） -->
   <div id="screen">
-    <div id="screenQuestionText"></div>
-    <div id="screenTimer"></div>
+    <div id="screenQuestionText" style="display:none;"></div>
+    <div id="screenTimer" style="display:none;"></div>
     <img id="screenImage" alt="問題画像" />
-    <div id="screenChoices"></div>
+    <div id="screenChoices" style="display:none;"></div>
     <div id="screenRanking"></div>
   </div>
 </body>
 </html>
+
 
 

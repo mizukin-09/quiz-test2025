@@ -1,35 +1,30 @@
 /*******************************************************
- * script.js（最新版）
- * ・サーバー時間ベースで早押し計測
- * ・正解者ランキング：下位→上位へカウントアップ表示
- * ・最終結果ランキング：参加者全員を下位→上位で表示
- * ・待機フェーズ：背景のみ（question.html）は空画面
+ * script.js（最新版・フルコード）
+ *  - 参加者：スマホから回答
+ *  - question.html：問題表示＋10秒カウントダウン＋投票数＋正解表示＋ランキング
+ *  - admin.html：出題／選択肢表示開始／投票数表示／正解発表／正解者ランキング／最終結果
+ *  - 待機フェーズ：question は背景画像だけ（テキスト枠が出ない）
  *******************************************************/
 
 const ROOM_ID = "roomA";
+
 let db = null;
 let FS = null;
 
 let playerId = localStorage.getItem("playerId");
 let playerName = localStorage.getItem("playerName");
 
-/*******************************************************
- * ページ判定
- *******************************************************/
+// ページ判定
 const isIndex    = !!document.getElementById("joinBtn");
 const isQuestion = !!document.getElementById("screenQuestionText");
 const isAdmin    = !!document.getElementById("adminPanel");
 
-/*******************************************************
- * index 用 DOM
- *******************************************************/
+// index 用 DOM
 const nameInput   = document.getElementById("nameInput");
 const waitingArea = document.getElementById("waitingArea");
 const choicesDiv  = document.getElementById("choices");
 
-/*******************************************************
- * question 用（タイマー & ランキング表示）
- *******************************************************/
+// question 用
 let countdownInterval = null;
 let countdownQuestionId = null;
 let countdownLocked = false;
@@ -120,7 +115,7 @@ function listenState() {
 
     const { phase, currentQuestion, correct } = st;
 
-    /******** index（回答画面） ********/
+    // --- index（参加者） ---
     if (isIndex) {
       if (phase === "waiting" || phase === "intro") {
         waitingArea.style.display = "block";
@@ -150,7 +145,7 @@ function listenState() {
       }
     }
 
-    /******** question（画面共有用） ********/
+    // --- question（画面共有側） ---
     if (isQuestion) {
       updateScreen(st);
     }
@@ -162,7 +157,9 @@ function listenState() {
  *******************************************************/
 async function renderChoices(qid) {
   if (!FS) return;
-  const qSnap = await FS.getDoc(FS.doc(db, "rooms", ROOM_ID, "questions", String(qid)));
+  const qSnap = await FS.getDoc(
+    FS.doc(db, "rooms", ROOM_ID, "questions", String(qid))
+  );
   if (!qSnap.exists()) {
     choicesDiv.innerHTML = "<p>問題データがありません</p>";
     return;
@@ -175,25 +172,23 @@ async function renderChoices(qid) {
     btn.className = "choiceBtn";
     btn.textContent = `${idx + 1}. ${opt}`;
     btn.onclick = () => answer(idx + 1);
-    styleChoice(btn);
+
+    btn.style.display = "block";
+    btn.style.width = "100%";
+    btn.style.fontSize = "20px";
+    btn.style.padding = "12px";
+    btn.style.margin = "8px 0";
+    btn.style.borderRadius = "6px";
+    btn.style.border = "2px solid #ccc";
+    btn.style.background = "#f4f4f4";
+    btn.style.color = "#333";
+
     choicesDiv.appendChild(btn);
   });
 }
 
-function styleChoice(btn) {
-  btn.style.display = "block";
-  btn.style.width = "100%";
-  btn.style.fontSize = "20px";
-  btn.style.padding = "12px";
-  btn.style.margin = "8px 0";
-  btn.style.borderRadius = "6px";
-  btn.style.border = "2px solid #ccc";
-  btn.style.background = "#f4f4f4";
-  btn.style.color = "#333";
-}
-
 /*******************************************************
- * ④ index：回答送信（サーバー時刻で記録）
+ * ④ index：回答送信
  *******************************************************/
 async function answer(optIdx) {
   if (!FS) return;
@@ -208,6 +203,7 @@ async function answer(optIdx) {
 
   disableChoices();
 
+  // 自分が押した選択肢を青枠、それ以外を薄く
   document.querySelectorAll(".choiceBtn").forEach((btn, idx) => {
     if (idx + 1 === optIdx) {
       btn.style.border = "4px solid #0066ff";
@@ -237,9 +233,6 @@ function disableChoices() {
   document.querySelectorAll(".choiceBtn").forEach((b) => (b.disabled = true));
 }
 
-/*******************************************************
- * ⑤ index：正解発表
- *******************************************************/
 function showIndexCorrect(correct) {
   document.querySelectorAll(".choiceBtn").forEach((btn, idx) => {
     if (idx + 1 === correct) {
@@ -255,11 +248,19 @@ function showIndexCorrect(correct) {
 }
 
 /*******************************************************
- * ⑥ question：画面更新
+ * ⑤ question：画面更新
  *******************************************************/
 async function updateScreen(st) {
   if (!FS) return;
-  const { currentQuestion, phase, votes, correct, deadline, ranking, finalRanking } = st;
+  const {
+    currentQuestion,
+    phase,
+    votes,
+    correct,
+    deadline,
+    ranking,
+    finalRanking
+  } = st;
 
   const qt        = document.getElementById("screenQuestionText");
   const list      = document.getElementById("screenChoices");
@@ -267,58 +268,64 @@ async function updateScreen(st) {
   const imgEl     = document.getElementById("screenImage");
   const rankingEl = document.getElementById("screenRanking");
 
-  // 待機フェーズ：背景のみ
+  // --- waiting：背景のみ ---
   if (phase === "waiting") {
-    if (qt) qt.textContent = "";
-    if (list) list.innerHTML = "";
-    if (timerEl) timerEl.textContent = "";
+    if (qt) { qt.textContent = ""; qt.style.display = "none"; }
+    if (list) { list.innerHTML = ""; list.style.display = "none"; }
+    if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
     if (imgEl) imgEl.style.display = "none";
-    if (rankingEl) rankingEl.innerHTML = "";
+    if (rankingEl) { rankingEl.innerHTML = ""; rankingEl.style.display = "none"; }
     stopCountdown();
     stopRankingAnimation();
     return;
   }
 
-  // ランキング以外ではランキングを消す
+  // ランキング以外ではランキング枠を消す
   if (rankingEl && phase !== "ranking" && phase !== "finalRanking") {
     stopRankingAnimation();
     rankingEl.innerHTML = "";
+    rankingEl.style.display = "none";
   }
 
-  // 最終結果
+  // --- 最終結果 ---
   if (phase === "finalRanking") {
-    if (qt) qt.textContent = "最終結果発表";
-    if (list) list.innerHTML = "";
-    if (timerEl) timerEl.textContent = "";
+    if (qt) { qt.textContent = "最終結果発表"; qt.style.display = "block"; }
+    if (list) { list.innerHTML = ""; list.style.display = "none"; }
+    if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
     if (imgEl) imgEl.style.display = "none";
+    if (rankingEl) rankingEl.style.display = "block";
     showFinalRanking(finalRanking || []);
     return;
   }
 
-  // 各問の正解者ランキング
+  // --- 各問の正解者ランキング ---
   if (phase === "ranking") {
-    if (qt) qt.textContent = "正解者ランキング（上位10名）";
-    if (list) list.innerHTML = "";
-    if (timerEl) timerEl.textContent = "";
+    if (qt) { qt.textContent = "正解者ランキング（上位10名）"; qt.style.display = "block"; }
+    if (list) { list.innerHTML = ""; list.style.display = "none"; }
+    if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
     if (imgEl) imgEl.style.display = "none";
+    if (rankingEl) rankingEl.style.display = "block";
     startRankingAnimation(ranking || []);
     return;
   }
 
-  // ここから intro / question / closed / votes / result
-  const qSnap = await FS.getDoc(FS.doc(db, "rooms", ROOM_ID, "questions", String(currentQuestion)));
+  // --- intro / question / closed / votes / result ---
+  const qSnap = await FS.getDoc(
+    FS.doc(db, "rooms", ROOM_ID, "questions", String(currentQuestion))
+  );
   if (!qSnap.exists()) {
-    if (qt) qt.textContent = "問題データがありません";
-    if (list) list.innerHTML = "";
-    if (timerEl) timerEl.textContent = "";
+    if (qt) { qt.textContent = "問題データがありません"; qt.style.display = "block"; }
+    if (list) { list.innerHTML = ""; list.style.display = "none"; }
+    if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
     if (imgEl) imgEl.style.display = "none";
     stopCountdown();
     return;
   }
   const q = qSnap.data();
 
-  if (qt) qt.textContent = q.text || "";
-  if (list) list.innerHTML = "";
+  if (qt) { qt.textContent = q.text || ""; qt.style.display = "block"; }
+  if (list) { list.innerHTML = ""; list.style.display = "block"; }
+  if (timerEl) timerEl.style.display = "block";
 
   if (imgEl) {
     if (q.imageUrl) {
@@ -329,7 +336,7 @@ async function updateScreen(st) {
     }
   }
 
-  // ★ intro フェーズ：タイマー表示は空のまま（「レディーゴー」文言を出さない）
+  // intro：タイマーも非表示（文言なし）
   if (phase === "intro") {
     if (timerEl) timerEl.textContent = "";
     stopCountdown();
@@ -377,7 +384,7 @@ async function updateScreen(st) {
 }
 
 /*******************************************************
- * question：カウントダウン（10秒）
+ * ⑥ question：10秒カウントダウン
  *******************************************************/
 function startCountdown(qid, deadlineMs) {
   const timerEl = document.getElementById("screenTimer");
@@ -388,7 +395,6 @@ function startCountdown(qid, deadlineMs) {
     countdownQuestionId = qid;
     countdownLocked = false;
   }
-
   if (countdownInterval) return;
 
   function tick() {
@@ -424,7 +430,7 @@ function stopCountdown() {
 }
 
 /*******************************************************
- * question：正解者ランキング（10位→1位）
+ * ⑦ question：正解者ランキング（10位→1位）
  *******************************************************/
 function startRankingAnimation(ranking) {
   const rankingEl = document.getElementById("screenRanking");
@@ -467,7 +473,7 @@ function stopRankingAnimation() {
 }
 
 /*******************************************************
- * question：最終結果ランキング（下位→上位）
+ * ⑧ question：最終結果ランキング（下位→上位）
  *******************************************************/
 function showFinalRanking(finalRanking) {
   const rankingEl = document.getElementById("screenRanking");
@@ -492,12 +498,15 @@ function showFinalRanking(finalRanking) {
 }
 
 /*******************************************************
- * ⑦ admin：出題関連
+ * ⑨ admin：出題系（intro / question / votes / result）
  *******************************************************/
 async function admin_showIntro(qid) {
   if (!FS) { alert("読み込み中です"); return; }
 
-  await FS.setDoc(FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)), {});
+  await FS.setDoc(
+    FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)),
+    {}
+  );
 
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
   const snap = await FS.getDoc(roomRef);
@@ -519,7 +528,10 @@ async function admin_showIntro(qid) {
 async function admin_startQuestion(qid) {
   if (!FS) { alert("読み込み中です"); return; }
 
-  await FS.setDoc(FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)), {});
+  await FS.setDoc(
+    FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)),
+    {}
+  );
 
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
   const snap = await FS.getDoc(roomRef);
@@ -587,7 +599,7 @@ async function admin_reveal(qid, correct) {
 }
 
 /*******************************************************
- * ⑧ admin：正解者ランキング & 得点加算
+ * ⑩ admin：正解者ランキング＋得点加算
  *******************************************************/
 async function admin_showRanking(qid, correct) {
   if (!FS) { alert("読み込み中です"); return; }
@@ -645,7 +657,9 @@ async function admin_showRanking(qid, correct) {
     timeMs: p.timeMs
   }));
 
+  // 得点加算（まだなら）
   if (!alreadyScored) {
+    // 参加フラグ
     for (const pid in answers) {
       const pInfo = players[pid];
       if (!pInfo) continue;
@@ -658,14 +672,15 @@ async function admin_showRanking(qid, correct) {
       );
     }
 
+    // 正解者に得点
     for (let i = 0; i < tmpList.length; i++) {
       const p = tmpList[i];
       const pInfo = players[p.pid] || { score: 0 };
-      let add = 10;
+      let add = 10;               // 正解者全員に10点
 
-      if (i === 0) add += 5;
-      else if (i === 1) add += 3;
-      else if (i === 2) add += 1;
+      if (i === 0) add += 5;      // 1位 +5
+      else if (i === 1) add += 3; // 2位 +3
+      else if (i === 2) add += 1; // 3位 +1
 
       const newScore = (pInfo.score || 0) + add;
       players[p.pid].score = newScore;
@@ -692,7 +707,7 @@ async function admin_showRanking(qid, correct) {
 }
 
 /*******************************************************
- * ⑨ admin：最終結果ランキング
+ * ⑪ admin：最終結果ランキング
  *******************************************************/
 async function admin_showFinalRanking() {
   if (!FS) { alert("読み込み中です"); return; }
@@ -705,7 +720,7 @@ async function admin_showFinalRanking() {
   playersSnap.forEach(pdoc => {
     const pdata = pdoc.data();
     const participated = pdata.participated || 0;
-    if (participated <= 0) return;
+    if (participated <= 0) return; // 一度も参加していない人は除外
 
     list.push({
       name: pdata.name || "名無し",
@@ -748,7 +763,7 @@ async function admin_showFinalRanking() {
 }
 
 /*******************************************************
- * ⑩ admin：待機画面へ戻す
+ * ⑫ admin：待機画面へ戻す
  *******************************************************/
 async function admin_resetScreen() {
   if (!FS) { alert("読み込み中です"); return; }
@@ -771,7 +786,7 @@ async function admin_resetScreen() {
 }
 
 /*******************************************************
- * Firebase 受け取り
+ * ⑬ Firebase 初期化受け取り
  *******************************************************/
 window.addEventListener("load", () => {
   db = window.firebaseDB;
@@ -782,14 +797,17 @@ window.addEventListener("load", () => {
     return;
   }
 
+  // 参加画面：前回の名前があれば再表示
   if (isIndex && playerName && nameInput) {
     nameInput.value = playerName;
   }
 
+  // question 画面は常に state を監視
   if (isQuestion) {
     listenState();
   }
 });
+
 
 
 
