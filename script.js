@@ -1,9 +1,8 @@
 /*******************************************************
- * script.js（最新版・フルコード）
+ * script.js（最新版・フルコード / 最終結果バグ修正版）
  *  - 参加者：スマホから回答
  *  - question.html：問題表示＋10秒カウントダウン＋投票数＋正解表示＋ランキング
  *  - admin.html：出題／選択肢表示開始／投票数表示／正解発表／正解者ランキング／最終結果
- *  - 待機フェーズ：question は背景画像だけ（テキスト枠が出ない）
  *******************************************************/
 
 const ROOM_ID = "roomA";
@@ -336,7 +335,7 @@ async function updateScreen(st) {
     }
   }
 
-  // intro：タイマーも非表示（文言なし）
+  // intro：タイマー非表示
   if (phase === "intro") {
     if (timerEl) timerEl.textContent = "";
     stopCountdown();
@@ -486,6 +485,7 @@ function showFinalRanking(finalRanking) {
     return;
   }
 
+  // rank 昇順で並んでいる前提。下位 → 上位になるよう逆順で表示
   const sorted = finalRanking.slice().sort((a, b) => a.rank - b.rank);
 
   let html = "<h2>最終結果ランキング</h2><ol>";
@@ -719,9 +719,7 @@ async function admin_showFinalRanking() {
   const list = [];
   playersSnap.forEach(pdoc => {
     const pdata = pdoc.data();
-    const participated = pdata.participated || 0;
-    if (participated <= 0) return; // 一度も参加していない人は除外
-
+    // ★修正ポイント：participated でフィルタせず、全プレイヤーを対象にする
     list.push({
       name: pdata.name || "名無し",
       totalScore: pdata.score || 0
