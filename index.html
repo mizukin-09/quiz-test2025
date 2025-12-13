@@ -3,24 +3,22 @@
 <head>
   <meta charset="UTF-8" />
   <title>クイズ参加画面</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <style>
-    body { font-family: system-ui, sans-serif; padding: 20px; }
-    h1 { font-size: 20px; margin-bottom: 16px; }
-    input, button {
-      width: 100%; padding: 10px; font-size: 18px;
-      margin: 6px 0; box-sizing: border-box;
-    }
-    button { cursor: pointer; }
-    #choices { margin-top: 20px; }
-  </style>
+  <link rel="stylesheet" href="style.css" />
 
-  <!-- Firebase -->
+  <!-- Firebase (CDN) -->
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
     import {
-      getFirestore, doc, setDoc, getDoc, updateDoc, onSnapshot
+      getFirestore,
+      doc,
+      setDoc,
+      getDoc,
+      updateDoc,
+      collection,
+      getDocs,
+      onSnapshot,
+      serverTimestamp
     } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -35,26 +33,69 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
+    // script.js から使うオブジェクトを window に渡す
     window.firebaseDB = db;
-    window.firebaseFirestoreFuncs = { doc, setDoc, getDoc, updateDoc, onSnapshot };
+    window.firebaseFirestoreFuncs = {
+      doc,
+      setDoc,
+      getDoc,
+      updateDoc,
+      collection,
+      getDocs,
+      onSnapshot,
+      serverTimestamp
+    };
   </script>
 
-  <script src="script.js" defer></script>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      padding: 20px;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 12px;
+    }
+    #waitingArea {
+      margin-top: 16px;
+      font-size: 18px;
+    }
+    #choices {
+      margin-top: 24px;
+    }
+    input#nameInput {
+      padding: 8px 12px;
+      font-size: 16px;
+    }
+    button#joinBtn {
+      padding: 8px 16px;
+      font-size: 16px;
+      margin-left: 8px;
+    }
+  </style>
+
+  <!-- メインロジック -->
+  <script src="script.js"></script>
 </head>
 
 <body>
-  <h1>クイズに参加</h1>
+  <h1>クイズに参加しよう！</h1>
 
-  <input id="nameInput" placeholder="ニックネーム" />
-  <button id="joinBtn" onclick="joinGame()">参加する</button>
-
-  <div id="waitingArea" style="display:none; margin-top: 16px;">
-    <h2>司会が問題を出題するまでお待ちください</h2>
+  <div id="joinArea">
+    <input id="nameInput" placeholder="ニックネームを入力" />
+    <button id="joinBtn" onclick="joinGame()">参加する</button>
   </div>
 
+  <!-- 参加後に表示される待機メッセージ -->
+  <div id="waitingArea" style="display:none;">
+    司会の合図があるまでお待ちください…
+  </div>
+
+  <!-- 回答用の選択肢だけを表示（問題文は画面共有側で表示） -->
   <div id="choices"></div>
 </body>
 </html>
+
 
 
 

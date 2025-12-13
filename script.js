@@ -1,20 +1,24 @@
 /*******************************************************
- * script.js（クイズ用・得点/ランキング/最終結果 修正版2）
+ * script.js（最新版）
+ * ・サーバー時間ベースで早押し計測
+ * ・正解者ランキング：下位→上位へカウントアップ表示
+ * ・最終結果ランキング：参加者全員を下位→上位で表示
  *******************************************************/
 
 const ROOM_ID = "roomA";
 let db = null;
 let FS = null;
 
+// ローカル保存しているプレイヤー情報
 let playerId = localStorage.getItem("playerId");
 let playerName = localStorage.getItem("playerName");
 
 /*******************************************************
  * ページ判定
  *******************************************************/
-const isIndex    = !!document.getElementById("joinBtn");
-const isQuestion = !!document.getElementById("screenQuestionText");
-const isAdmin    = !!document.getElementById("adminPanel");
+const isIndex    = !!document.getElementById("joinBtn");           // スマホ回答画面
+const isQuestion = !!document.getElementById("screenQuestionText"); // 画面共有用
+const isAdmin    = !!document.getElementById("adminPanel");         // 管理画面
 
 /*******************************************************
  * index 用 DOM
@@ -24,7 +28,7 @@ const waitingArea = document.getElementById("waitingArea");
 const choicesDiv  = document.getElementById("choices");
 
 /*******************************************************
- * question 用（カウントダウン & ランキングアニメ）
+ * question 用（タイマー & ランキング表示）
  *******************************************************/
 let countdownInterval = null;
 let countdownQuestionId = null;
@@ -42,12 +46,26 @@ function makeId(len = 10) {
   return s;
 }
 
+// Firestore Timestamp → number(ms) 変換
+function toMillis(t) {
+  if (!t) return null;
+  if (typeof t === "number") return t;
+  if (typeof t.toMillis === "function") return t.toMillis();
+  if (typeof t.seconds === "number" && typeof t.nanoseconds === "number") {
+    return t.seconds * 1000 + t.nanoseconds / 1e6;
+  }
+  return null;
+}
+
 /*******************************************************
- * ① index：参加処理
+ * ① index（参加画面）：参加処理
  *******************************************************/
 async function joinGame() {
   if (!isIndex) return;
-  if (!FS) { alert("読み込み中です。1秒後にもう一度お試しください"); return; }
+  if (!FS) {
+    alert("読み込み中です。少し待ってからもう一度お試しください");
+    return;
+  }
 
   const name = nameInput.value.trim();
   if (!name) {
@@ -62,7 +80,6 @@ async function joinGame() {
   playerName = name;
   localStorage.setItem("playerName", name);
 
-  // 参加時にスコアと参加回数をリセット
   await FS.setDoc(
     FS.doc(db, "rooms", ROOM_ID, "players", playerId),
     {
@@ -76,13 +93,13 @@ async function joinGame() {
 
   nameInput.style.display = "none";
   document.getElementById("joinBtn").style.display = "none";
-  waitingArea.style.display = "block";
+  if (waitingArea) waitingArea.style.display = "block";
 
   listenState();
 }
 
 /*******************************************************
- * ② Firestore state 監視（index & question）
+ * ② Firestore state 監視（index & question 共通）
  *******************************************************/
 let unState = null;
 
@@ -95,9 +112,9 @@ function listenState() {
     const st = snap.data().state;
     if (!st) return;
 
-    const { phase, currentQuestion, votes, correct, deadline, ranking, finalRanking } = st;
+    const { phase, currentQuestion, votes, correct, finalRanking, ranking } = st;
 
-    /******** index（スマホ回答用） ********/
+    /******** index（回答画面） ********/
     if (isIndex) {
       if (phase === "waiting" || phase === "intro") {
         waitingArea.style.display = "block";
@@ -121,6 +138,7 @@ function listenState() {
         return;
       }
 
+      // その他のフェーズでは単に回答を無効化
       if (phase === "votes" || phase === "ranking" || phase === "finalRanking") {
         disableChoices();
         return;
@@ -135,7 +153,7 @@ function listenState() {
 }
 
 /*******************************************************
- * ③ index：選択肢だけ表示
+ * ③ index：選択肢表示
  *******************************************************/
 async function renderChoices(qid) {
   if (!FS) return;
@@ -170,7 +188,7 @@ function styleChoice(btn) {
 }
 
 /*******************************************************
- * ④ index：回答送信（回答時間も保存）
+ * ④ index：回答送信（サーバー時刻で記録）
  *******************************************************/
 async function answer(optIdx) {
   if (!FS) return;
@@ -185,7 +203,7 @@ async function answer(optIdx) {
 
   disableChoices();
 
-  // 自分の選択肢を青枠で強調
+  // 自分が選んだ選択肢だけ青く強調
   document.querySelectorAll(".choiceBtn").forEach((btn, idx) => {
     if (idx + 1 === optIdx) {
       btn.style.border = "4px solid #0066ff";
@@ -199,12 +217,13 @@ async function answer(optIdx) {
 
   const qid = st.currentQuestion;
 
+  // ★サーバー時刻で回答時間を記録
   await FS.setDoc(
     FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)),
     {
       [playerId]: {
         option: optIdx,
-        time: Date.now()
+        time: FS.serverTimestamp()
       }
     },
     { merge: true }
@@ -251,7 +270,7 @@ async function updateScreen(st) {
     rankingEl.innerHTML = "";
   }
 
-  // 完全待機
+  // 待機
   if (phase === "waiting") {
     qt.textContent = "問題を待っています…";
     list.innerHTML = "";
@@ -267,26 +286,21 @@ async function updateScreen(st) {
     list.innerHTML = "";
     if (timerEl) timerEl.textContent = "";
     if (imgEl) imgEl.style.display = "none";
-    if (rankingEl) {
-      showFinalRanking(finalRanking || []);
-    }
+    showFinalRanking(finalRanking || []);
     return;
   }
 
-  // 各問題の正解者ランキング
+  // 1問ごとの正解者ランキング
   if (phase === "ranking") {
     qt.textContent = "正解者ランキング（上位10名）";
     list.innerHTML = "";
     if (timerEl) timerEl.textContent = "";
     if (imgEl) imgEl.style.display = "none";
-
-    if (rankingEl) {
-      startRankingAnimation(ranking || []);
-    }
+    startRankingAnimation(ranking || []);
     return;
   }
 
-  // ここから intro / question / closed / votes / result 用
+  // ここから intro / question / closed / votes / result
   const qSnap = await FS.getDoc(FS.doc(db, "rooms", ROOM_ID, "questions", String(currentQuestion)));
   if (!qSnap.exists()) {
     qt.textContent = "問題データがありません";
@@ -301,7 +315,7 @@ async function updateScreen(st) {
   qt.textContent = q.text || "";
   list.innerHTML = "";
 
-  // 画像
+  // 画像問題
   if (imgEl) {
     if (q.imageUrl) {
       imgEl.src = q.imageUrl;
@@ -311,14 +325,14 @@ async function updateScreen(st) {
     }
   }
 
-  // intro
+  // intro（問題文だけ見せて「レディーゴー」待ち）
   if (phase === "intro") {
     if (timerEl) timerEl.textContent = "レディーゴーの合図を待っています…";
     stopCountdown();
     return;
   }
 
-  // タイマー
+  // question フェーズ：タイマー開始
   if (phase === "question" && typeof deadline === "number") {
     startCountdown(currentQuestion, deadline);
   } else {
@@ -329,7 +343,7 @@ async function updateScreen(st) {
     }
   }
 
-  // 選択肢
+  // 選択肢の表示（question / votes / result 問わず）
   (q.options || []).forEach((opt, idx) => {
     const div = document.createElement("div");
     div.className = "screenChoice";
@@ -385,6 +399,7 @@ function startCountdown(qid, deadlineMs) {
       timerEl.textContent = "時間終了！";
       stopCountdown();
 
+      // 一度だけ「closed」にする
       if (!countdownLocked && FS) {
         countdownLocked = true;
         FS.setDoc(
@@ -408,7 +423,7 @@ function stopCountdown() {
 }
 
 /*******************************************************
- * question：各問 正解者ランキング（10位→1位）
+ * question：正解者ランキング（10位→1位の順で表示）
  *******************************************************/
 function startRankingAnimation(ranking) {
   const rankingEl = document.getElementById("screenRanking");
@@ -421,9 +436,9 @@ function startRankingAnimation(ranking) {
     return;
   }
 
-  // rank 1〜N を昇順で並べ直し、その「末尾（=一番下の順位）」から表示していく
-  const sorted = ranking.slice().sort((a, b) => a.rank - b.rank); // 1,2,3,...N
-  let idx = sorted.length - 1; // 末尾から（=最下位）スタート
+  // rank 1〜N を昇順で並べなおし、末尾（=最下位）から表示する
+  const sorted = ranking.slice().sort((a, b) => a.rank - b.rank);
+  let idx = sorted.length - 1;  // 最下位スタート
 
   rankingEl.innerHTML = "<h2>正解者ランキング（上位10名）</h2><ol id='rankingList'></ol>";
   const listEl = document.getElementById("rankingList");
@@ -433,7 +448,7 @@ function startRankingAnimation(ranking) {
       stopRankingAnimation();
       return;
     }
-    const p = sorted[idx--]; // 下位→上位へ
+    const p = sorted[idx--]; // 下位 → 上位
     const sec = ((p.timeMs || 0) / 1000).toFixed(2);
     const li = document.createElement("li");
     li.textContent = `${p.rank}位：${p.name}（${sec}秒）`;
@@ -452,8 +467,7 @@ function stopRankingAnimation() {
 }
 
 /*******************************************************
- * question：最終結果ランキング（総合得点）
- * → 参加者全員を「下の順位から」表示
+ * question：最終結果ランキング（参加者全員・下位→上位）
  *******************************************************/
 function showFinalRanking(finalRanking) {
   const rankingEl = document.getElementById("screenRanking");
@@ -466,7 +480,7 @@ function showFinalRanking(finalRanking) {
     return;
   }
 
-  // rank 1〜N を昇順で並べて、末尾（最下位）から表示
+  // rank 1〜N を昇順に並べて、末尾（=最下位）から表示
   const sorted = finalRanking.slice().sort((a, b) => a.rank - b.rank);
 
   let html = "<h2>最終結果ランキング</h2><ol>";
@@ -479,13 +493,14 @@ function showFinalRanking(finalRanking) {
 }
 
 /*******************************************************
- * ⑦ admin：出題 / 選択肢表示 / 投票数表示 / 正解発表
+ * ⑦ admin 側の制御関数
  *******************************************************/
 
-// 出題（映像・音だけ）
+// 出題（問題文だけ見せるフェーズ）
 async function admin_showIntro(qid) {
   if (!FS) { alert("読み込み中です"); return; }
 
+  // 古い回答をクリア
   await FS.setDoc(FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)), {});
 
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
@@ -511,9 +526,6 @@ async function admin_startQuestion(qid) {
 
   await FS.setDoc(FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)), {});
 
-  const startTime = Date.now();
-  const deadline  = startTime + 10000; // 10秒
-
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
   const snap = await FS.getDoc(roomRef);
   const state = snap.exists() ? (snap.data().state || {}) : {};
@@ -524,8 +536,8 @@ async function admin_startQuestion(qid) {
     currentQuestion: qid,
     correct: null,
     votes: { 1: 0, 2: 0, 3: 0, 4: 0 },
-    startTime,
-    deadline
+    startTime: FS.serverTimestamp(),     // ★サーバー開始時刻
+    deadline: Date.now() + 10000         // ★クライアント側の締め切り（10秒）
   };
 
   await FS.setDoc(roomRef, { state: newState }, { merge: true });
@@ -563,7 +575,7 @@ async function admin_showVotes(qid) {
   await FS.setDoc(roomRef, { state: newState }, { merge: true });
 }
 
-// 正解発表（見た目だけ）
+// 正解発表（表示のみ）
 async function admin_reveal(qid, correct) {
   if (!FS) { alert("読み込み中です"); return; }
 
@@ -582,7 +594,7 @@ async function admin_reveal(qid, correct) {
 }
 
 /*******************************************************
- * ⑧ admin：各問題のランキング + 得点加算（1問につき1回だけ）
+ * ⑧ admin：各問題のランキング + 得点加算（1問1回だけ）
  *******************************************************/
 async function admin_showRanking(qid, correct) {
   if (!FS) { alert("読み込み中です"); return; }
@@ -591,7 +603,7 @@ async function admin_showRanking(qid, correct) {
   const roomSnap = await FS.getDoc(roomRef);
   const roomData = roomSnap.exists() ? roomSnap.data() : {};
   const state = roomData.state || {};
-  const startTime = state.startTime || null;
+  const startTimeMs = toMillis(state.startTime);   // サーバー開始時刻
   const scoredQuestions = state.scoredQuestions || {};
 
   const alreadyScored = !!scoredQuestions[qid];
@@ -612,61 +624,46 @@ async function admin_showRanking(qid, correct) {
     players[pdoc.id] = {
       name: pdata.name || "名無し",
       score: pdata.score || 0,
-      participated: pdata.participated || 0,
-      joinedAt: pdata.joinedAt || 0
+      participated: pdata.participated || 0
     };
   });
 
-  // 正解者だけ抽出
-  let minAnswerTime = null;
-  const resultList = [];
+  // 正解者を抽出し、経過時間を計算
+  const tmpList = [];
   for (const pid in answers) {
     const entry = answers[pid];
     if (!entry || typeof entry !== "object") continue;
-    if (entry.option === correct) {
-      const rawTime = entry.time || 0;
+    if (entry.option !== correct) continue;
 
-      if (minAnswerTime === null || rawTime < minAnswerTime) {
-        minAnswerTime = rawTime;
-      }
+    const ansMs = toMillis(entry.time);
+    if (ansMs == null || startTimeMs == null) continue;
 
-      resultList.push({
-        pid,
-        name: players[pid] ? players[pid].name : "名無し",
-        rawTime
-      });
-    }
+    const elapsedMs = Math.max(0, ansMs - startTimeMs);
+
+    tmpList.push({
+      pid,
+      name: players[pid] ? players[pid].name : "名無し",
+      timeMs: elapsedMs
+    });
   }
-
-  // ベースとなる開始時刻（startTime がない場合は最初の回答を基準にする）
-  let baseTime = startTime;
-  if (!baseTime) {
-    baseTime = minAnswerTime || Date.now();
-  }
-
-  // 経過時間を計算
-  resultList.forEach(r => {
-    r.timeMs = Math.max(0, r.rawTime - baseTime);
-  });
 
   // 早い順
-  resultList.sort((a, b) => a.timeMs - b.timeMs);
+  tmpList.sort((a, b) => a.timeMs - b.timeMs);
 
-  // ランキング用（1位〜10位）
-  const ranking = resultList.slice(0, 10).map((p, idx) => ({
+  // 上位10名だけランキング用に保存
+  const ranking = tmpList.slice(0, 10).map((p, idx) => ({
     rank: idx + 1,
     name: p.name,
     timeMs: p.timeMs
   }));
 
-  // ★★ まだ得点加算していない場合だけ処理する ★★
+  // まだ採点していない場合だけスコア付与
   if (!alreadyScored) {
-    // 回答した全員を「参加者」としてカウント
+    // 回答した全員の「参加数」を+1
     for (const pid in answers) {
       const pInfo = players[pid];
       if (!pInfo) continue;
-      const participated = pInfo.participated || 0;
-      const newParticipated = participated + 1;
+      const newParticipated = (pInfo.participated || 0) + 1;
       players[pid].participated = newParticipated;
 
       await FS.updateDoc(
@@ -675,15 +672,15 @@ async function admin_showRanking(qid, correct) {
       );
     }
 
-    // 正解者に点数付与
-    for (let i = 0; i < resultList.length; i++) {
-      const p = resultList[i];
+    // 正解者に点数（全員+10 & 上位3名ボーナス）
+    for (let i = 0; i < tmpList.length; i++) {
+      const p = tmpList[i];
       const pInfo = players[p.pid] || { score: 0 };
       let add = 10; // 正解ボーナス
 
-      if (i === 0) add += 5;
-      else if (i === 1) add += 3;
-      else if (i === 2) add += 1;
+      if (i === 0) add += 5;      // 1位
+      else if (i === 1) add += 3; // 2位
+      else if (i === 2) add += 1; // 3位
 
       const newScore = (pInfo.score || 0) + add;
       players[p.pid].score = newScore;
@@ -711,7 +708,6 @@ async function admin_showRanking(qid, correct) {
 
 /*******************************************************
  * ⑨ admin：最終結果ランキング（総合得点）
- *  → 参加者（ここでは「最近参加＋1問以上回答した人」）だけ
  *******************************************************/
 async function admin_showFinalRanking() {
   if (!FS) { alert("読み込み中です"); return; }
@@ -720,18 +716,13 @@ async function admin_showFinalRanking() {
     FS.collection(db, "rooms", ROOM_ID, "players")
   );
 
-  const now = Date.now();
-  const cutoff = now - 24 * 60 * 60 * 1000; // 過去24時間以内に参加した人だけ対象
-
   const list = [];
   playersSnap.forEach(pdoc => {
     const pdata = pdoc.data();
     const participated = pdata.participated || 0;
-    const joinedAt = typeof pdata.joinedAt === "number" ? pdata.joinedAt : 0;
 
-    // 1問も参加していない or 昔すぎる参加者は除外（古いテストデータ対策）
+    // 1問も回答していない人は除外（古いテストデータなど）
     if (participated <= 0) return;
-    if (joinedAt && joinedAt < cutoff) return;
 
     list.push({
       name: pdata.name || "名無し",
@@ -775,32 +766,7 @@ async function admin_showFinalRanking() {
 }
 
 /*******************************************************
- * ⑩ admin：画像2択問題を登録して出題（任意）
- *******************************************************/
-async function admin_setupImageQuestion1() {
-  if (!FS) { alert("読み込み中です"); return; }
-
-  const qid = 4; // 画像問題のID（必要に応じて変更）
-
-  const questionData = {
-    id: qid,
-    text: "この画像はどちら？",
-    options: ["犬", "猫"],
-    correct: 2,
-    imageUrl: "picture_quiz/q4.png"
-  };
-
-  await FS.setDoc(
-    FS.doc(db, "rooms", ROOM_ID, "questions", String(qid)),
-    questionData
-  );
-
-  await admin_startQuestion(qid);
-  alert("画像2択問題を出題しました（imageUrl を必要に応じて変更してください）");
-}
-
-/*******************************************************
- * ⑪ Firebase inject on load
+ * ⑪ Firebase のインジェクト（共通）
  *******************************************************/
 window.addEventListener("load", () => {
   db = window.firebaseDB;
