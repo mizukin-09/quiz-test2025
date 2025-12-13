@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>出題画面（画面共有用）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+<style>
+  /* まず、画面の高さをきっちり100%にして余計な余白を消す */
+  html, body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    padding: 32px;
+    font-family: system-ui, sans-serif;
+
+    /* 背景画像の指定：ここだけ変えればOK */
+    background-image: url("picture_quiz/bg_quiz.png"); /* ←画像のパス */
+    background-size: cover;            /* 画面を隙間なく埋める（その代わりどこかがトリミングされる） */
+    background-position: center center;/* 画像の中心を基準にトリミング */
+    background-repeat: no-repeat;
+    /* 黒帯を出したくないなら background-color は消すか、画像に近い色にする */
+  }
+
+  #screenQuestionText { font-size: 32px; margin-bottom: 16px; }
+  #screenTimer { font-size: 24px; margin-bottom: 16px; color: #333; }
+  #screenImage {
+    max-width: 80vw;
+    max-height: 40vh;
+    display: none;
+    margin-bottom: 16px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    object-fit: contain;
+  }
+  .screenChoice { font-size: 24px; margin: 8px 0; padding: 10px; }
+  #screenRanking { margin-top: 24px; font-size: 22px; }
+  #screenRanking ol { padding-left: 24px; }
+</style>
+
+
+
+  <!-- Firebase -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
+    import { getFirestore, doc, getDoc, setDoc, onSnapshot }
+      from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDqEcoMwo3BM9g_0MnKCdXDVtfg0qv-bHg",
+      authDomain: "quiz-party2025.firebaseapp.com",
+      projectId: "quiz-party2025",
+      storageBucket: "quiz-party2025.firebasestorage.app",
+      messagingSenderId: "929065994714",
+      appId: "1:929065994714:web:196ebcf0208fd1096b98e3"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    window.firebaseDB = db;
+    window.firebaseFirestoreFuncs = { doc, getDoc, setDoc, onSnapshot };
+  </script>
+
+  <script src="script.js" defer></script>
+</head>
+
+<body>
+  <h1 id="screenQuestionText">問題を待っています…</h1>
+  <div id="screenTimer"></div>
+  <img id="screenImage" alt="問題画像" />
+  <div id="screenChoices"></div>
+
+  <div id="screenRanking"></div>
+</body>
+</html>
