@@ -45,17 +45,9 @@
   </script>
 
   <style>
-    body {
-      font-family: system-ui, sans-serif;
-      padding: 20px;
-    }
-    h1 {
-      font-size: 26px;
-      margin-bottom: 8px;
-    }
-    h2 {
-      margin: 16px 0 8px;
-    }
+    body { font-family: system-ui, sans-serif; padding: 20px; }
+    h1 { font-size: 26px; margin-bottom: 8px; }
+    h2 { margin: 16px 0 8px; }
     .questionControl {
       border: 1px solid #ccc;
       padding: 10px;
@@ -67,24 +59,25 @@
       padding: 8px 12px;
       font-size: 14px;
     }
-    small {
-      color: #666;
-      display: block;
-      margin-bottom: 4px;
-    }
+    small { color: #666; display: block; margin-bottom: 4px; }
   </style>
 
   <script src="script.js"></script>
 </head>
 <body>
   <h1>クイズ管理画面</h1>
-  <p>※事前に Firestore の「questions」コレクションに各問題を登録しておきます。</p>
+  <p>※事前に Firestore の「questions」に各問題を登録しておきます。</p>
 
   <div id="adminPanel">
-    <!-- Q1〜Q10 の制御ボタン。正解番号は実際の問題に合わせて変更してください -->
+    <!-- 待機画面 -->
+    <div class="questionControl">
+      <h2>待機画面</h2>
+      <button onclick="admin_resetScreen()">待機画面に戻す</button>
+    </div>
+
+    <!-- Q1〜Q10 （正解番号は実際の問題に合わせて変更） -->
     <div class="questionControl">
       <h2>Q1</h2>
-      <small>※正解番号は admin_reveal / admin_showRanking の第2引数</small>
       <button onclick="admin_showIntro(1)">Q1 出題（問題文だけ）</button>
       <button onclick="admin_startQuestion(1)">Q1 選択肢表示＆回答開始</button>
       <button onclick="admin_showVotes(1)">Q1 投票数表示</button>
@@ -94,7 +87,6 @@
 
     <div class="questionControl">
       <h2>Q2</h2>
-      <small>正解番号は必要に応じて変更してください</small>
       <button onclick="admin_showIntro(2)">Q2 出題（問題文だけ）</button>
       <button onclick="admin_startQuestion(2)">Q2 選択肢表示＆回答開始</button>
       <button onclick="admin_showVotes(2)">Q2 投票数表示</button>
@@ -112,12 +104,11 @@
     </div>
 
     <div class="questionControl">
-      <h2>Q4（画像問題の例）</h2>
-      <small>画像パスは question.html / Firestore の question データで設定</small>
+      <h2>Q4（画像問題例）</h2>
       <button onclick="admin_showIntro(4)">Q4 出題（問題文だけ）</button>
       <button onclick="admin_startQuestion(4)">Q4 選択肢表示＆回答開始</button>
       <button onclick="admin_showVotes(4)">Q4 投票数表示</button>
-      <button onclick="admin_reveal(4, 2)">Q4 正解発表（正解=2 など）</button>
+      <button onclick="admin_reveal(4, 2)">Q4 正解発表（正解=2）</button>
       <button onclick="admin_showRanking(4, 2)">Q4 正解者ランキング</button>
     </div>
 
@@ -140,7 +131,7 @@
     </div>
 
     <div class="questionControl">
-      <h2>Q7（画像問題の例）</h2>
+      <h2>Q7（画像問題例）</h2>
       <button onclick="admin_showIntro(7)">Q7 出題（問題文だけ）</button>
       <button onclick="admin_startQuestion(7)">Q7 選択肢表示＆回答開始</button>
       <button onclick="admin_showVotes(7)">Q7 投票数表示</button>
@@ -184,6 +175,7 @@
   </div>
 </body>
 </html>
+
 
 
 

@@ -54,7 +54,6 @@
       font-family: system-ui, sans-serif;
       padding: 32px;
       color: #111;
-      /* ★ 背景画像（必要に応じてパス変更） */
       background: #000 url("picture_quiz/bg_quiz.png") center center / cover no-repeat fixed;
     }
     #screenQuestionText {
@@ -101,8 +100,9 @@
   <script src="script.js"></script>
 </head>
 <body>
+  <!-- 初期表示は空（待機フェーズで背景だけになる） -->
   <div id="screen">
-    <div id="screenQuestionText">問題を待っています…</div>
+    <div id="screenQuestionText"></div>
     <div id="screenTimer"></div>
     <img id="screenImage" alt="問題画像" />
     <div id="screenChoices"></div>
@@ -110,4 +110,5 @@
   </div>
 </body>
 </html>
+
 
