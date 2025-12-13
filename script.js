@@ -1,5 +1,5 @@
 /*******************************************************
- * script.js（クイズ用・得点/ランキング/最終結果 修正版）
+ * script.js（クイズ用・得点/ランキング/最終結果 修正版2）
  *******************************************************/
 
 const ROOM_ID = "roomA";
@@ -199,7 +199,6 @@ async function answer(optIdx) {
 
   const qid = st.currentQuestion;
 
-  // 回答内容を保存（正解/不正解に関わらず）
   await FS.setDoc(
     FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)),
     {
@@ -422,18 +421,19 @@ function startRankingAnimation(ranking) {
     return;
   }
 
-  const items = ranking.slice().sort((a, b) => b.rank - a.rank); // 10位→1位
+  // rank 1〜N を昇順で並べ直し、その「末尾（=一番下の順位）」から表示していく
+  const sorted = ranking.slice().sort((a, b) => a.rank - b.rank); // 1,2,3,...N
+  let idx = sorted.length - 1; // 末尾から（=最下位）スタート
 
   rankingEl.innerHTML = "<h2>正解者ランキング（上位10名）</h2><ol id='rankingList'></ol>";
   const listEl = document.getElementById("rankingList");
 
-  let idx = 0;
   function step() {
-    if (idx >= items.length) {
+    if (idx < 0) {
       stopRankingAnimation();
       return;
     }
-    const p = items[idx++];
+    const p = sorted[idx--]; // 下位→上位へ
     const sec = ((p.timeMs || 0) / 1000).toFixed(2);
     const li = document.createElement("li");
     li.textContent = `${p.rank}位：${p.name}（${sec}秒）`;
@@ -453,6 +453,7 @@ function stopRankingAnimation() {
 
 /*******************************************************
  * question：最終結果ランキング（総合得点）
+ * → 参加者全員を「下の順位から」表示
  *******************************************************/
 function showFinalRanking(finalRanking) {
   const rankingEl = document.getElementById("screenRanking");
@@ -465,10 +466,14 @@ function showFinalRanking(finalRanking) {
     return;
   }
 
+  // rank 1〜N を昇順で並べて、末尾（最下位）から表示
+  const sorted = finalRanking.slice().sort((a, b) => a.rank - b.rank);
+
   let html = "<h2>最終結果ランキング</h2><ol>";
-  finalRanking.forEach((p) => {
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i];
     html += `<li>${p.rank}位：${p.name}（${p.totalScore}点）</li>`;
-  });
+  }
   html += "</ol>";
   rankingEl.innerHTML = html;
 }
@@ -483,19 +488,21 @@ async function admin_showIntro(qid) {
 
   await FS.setDoc(FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)), {});
 
-  await FS.setDoc(
-    FS.doc(db, "rooms", ROOM_ID),
-    {
-      state: {
-        phase: "intro",
-        currentQuestion: qid,
-        correct: null,
-        votes: null,
-        deadline: null
-      }
-    },
-    { merge: true }
-  );
+  const roomRef = FS.doc(db, "rooms", ROOM_ID);
+  const snap = await FS.getDoc(roomRef);
+  const state = snap.exists() ? (snap.data().state || {}) : {};
+
+  const newState = {
+    ...state,
+    phase: "intro",
+    currentQuestion: qid,
+    correct: null,
+    votes: null,
+    deadline: null,
+    startTime: null
+  };
+
+  await FS.setDoc(roomRef, { state: newState }, { merge: true });
 }
 
 // 選択肢表示（回答開始）
@@ -504,29 +511,34 @@ async function admin_startQuestion(qid) {
 
   await FS.setDoc(FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)), {});
 
-  const deadline = Date.now() + 10000; // 10秒
+  const startTime = Date.now();
+  const deadline  = startTime + 10000; // 10秒
 
-  await FS.setDoc(
-    FS.doc(db, "rooms", ROOM_ID),
-    {
-      state: {
-        phase: "question",
-        currentQuestion: qid,
-        correct: null,
-        votes: { 1: 0, 2: 0, 3: 0, 4: 0 },
-        deadline
-      }
-    },
-    { merge: true }
-  );
+  const roomRef = FS.doc(db, "rooms", ROOM_ID);
+  const snap = await FS.getDoc(roomRef);
+  const state = snap.exists() ? (snap.data().state || {}) : {};
+
+  const newState = {
+    ...state,
+    phase: "question",
+    currentQuestion: qid,
+    correct: null,
+    votes: { 1: 0, 2: 0, 3: 0, 4: 0 },
+    startTime,
+    deadline
+  };
+
+  await FS.setDoc(roomRef, { state: newState }, { merge: true });
 }
 
 // 投票数表示
 async function admin_showVotes(qid) {
   if (!FS) { alert("読み込み中です"); return; }
 
-  const snap = await FS.getDoc(FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)));
-  const data = snap.exists() ? snap.data() : {};
+  const answersSnap = await FS.getDoc(
+    FS.doc(db, "rooms", ROOM_ID, "answers", String(qid))
+  );
+  const data = answersSnap.exists() ? answersSnap.data() : {};
 
   const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
   for (let pid in data) {
@@ -536,35 +548,37 @@ async function admin_showVotes(qid) {
     if (counts[v] != null) counts[v]++;
   }
 
-  await FS.setDoc(
-    FS.doc(db, "rooms", ROOM_ID),
-    {
-      state: {
-        phase: "votes",
-        currentQuestion: qid,
-        correct: null,
-        votes: counts
-      }
-    },
-    { merge: true }
-  );
+  const roomRef = FS.doc(db, "rooms", ROOM_ID);
+  const snap = await FS.getDoc(roomRef);
+  const state = snap.exists() ? (snap.data().state || {}) : {};
+
+  const newState = {
+    ...state,
+    phase: "votes",
+    currentQuestion: qid,
+    votes: counts,
+    correct: null
+  };
+
+  await FS.setDoc(roomRef, { state: newState }, { merge: true });
 }
 
 // 正解発表（見た目だけ）
 async function admin_reveal(qid, correct) {
   if (!FS) { alert("読み込み中です"); return; }
 
-  await FS.setDoc(
-    FS.doc(db, "rooms", ROOM_ID),
-    {
-      state: {
-        phase: "result",
-        currentQuestion: qid,
-        correct
-      }
-    },
-    { merge: true }
-  );
+  const roomRef = FS.doc(db, "rooms", ROOM_ID);
+  const snap = await FS.getDoc(roomRef);
+  const state = snap.exists() ? (snap.data().state || {}) : {};
+
+  const newState = {
+    ...state,
+    phase: "result",
+    currentQuestion: qid,
+    correct
+  };
+
+  await FS.setDoc(roomRef, { state: newState }, { merge: true });
 }
 
 /*******************************************************
@@ -577,8 +591,7 @@ async function admin_showRanking(qid, correct) {
   const roomSnap = await FS.getDoc(roomRef);
   const roomData = roomSnap.exists() ? roomSnap.data() : {};
   const state = roomData.state || {};
-  const deadline = state.deadline || null;
-  const startTime = deadline ? (deadline - 10000) : null;
+  const startTime = state.startTime || null;
   const scoredQuestions = state.scoredQuestions || {};
 
   const alreadyScored = !!scoredQuestions[qid];
@@ -589,7 +602,7 @@ async function admin_showRanking(qid, correct) {
   );
   const answers = answersSnap.exists() ? answersSnap.data() : {};
 
-  // プレイヤー一覧（名前＋現在スコア＋参加回数）
+  // プレイヤー一覧
   const playersSnap = await FS.getDocs(
     FS.collection(db, "rooms", ROOM_ID, "players")
   );
@@ -599,33 +612,47 @@ async function admin_showRanking(qid, correct) {
     players[pdoc.id] = {
       name: pdata.name || "名無し",
       score: pdata.score || 0,
-      participated: pdata.participated || 0
+      participated: pdata.participated || 0,
+      joinedAt: pdata.joinedAt || 0
     };
   });
 
   // 正解者だけ抽出
+  let minAnswerTime = null;
   const resultList = [];
   for (const pid in answers) {
     const entry = answers[pid];
     if (!entry || typeof entry !== "object") continue;
     if (entry.option === correct) {
       const rawTime = entry.time || 0;
-      let elapsedMs = rawTime;
-      if (startTime) {
-        elapsedMs = Math.max(0, rawTime - startTime);
+
+      if (minAnswerTime === null || rawTime < minAnswerTime) {
+        minAnswerTime = rawTime;
       }
+
       resultList.push({
         pid,
         name: players[pid] ? players[pid].name : "名無し",
-        timeMs: elapsedMs
+        rawTime
       });
     }
   }
 
-  // 早い順にソート
+  // ベースとなる開始時刻（startTime がない場合は最初の回答を基準にする）
+  let baseTime = startTime;
+  if (!baseTime) {
+    baseTime = minAnswerTime || Date.now();
+  }
+
+  // 経過時間を計算
+  resultList.forEach(r => {
+    r.timeMs = Math.max(0, r.rawTime - baseTime);
+  });
+
+  // 早い順
   resultList.sort((a, b) => a.timeMs - b.timeMs);
 
-  // ランキング表示用に上位10名
+  // ランキング用（1位〜10位）
   const ranking = resultList.slice(0, 10).map((p, idx) => ({
     rank: idx + 1,
     name: p.name,
@@ -634,29 +661,31 @@ async function admin_showRanking(qid, correct) {
 
   // ★★ まだ得点加算していない場合だけ処理する ★★
   if (!alreadyScored) {
-    // その問題に回答した全員を「参加者」としてカウント
+    // 回答した全員を「参加者」としてカウント
     for (const pid in answers) {
       const pInfo = players[pid];
       if (!pInfo) continue;
       const participated = pInfo.participated || 0;
-      pInfo.participated = participated + 1;
+      const newParticipated = participated + 1;
+      players[pid].participated = newParticipated;
+
       await FS.updateDoc(
         FS.doc(db, "rooms", ROOM_ID, "players", pid),
-        { participated: pInfo.participated }
+        { participated: newParticipated }
       );
     }
 
-    // 正解者に点数を付与
+    // 正解者に点数付与
     for (let i = 0; i < resultList.length; i++) {
       const p = resultList[i];
-      const pInfo = players[p.pid] || { score: 0, participated: 0 };
+      const pInfo = players[p.pid] || { score: 0 };
       let add = 10; // 正解ボーナス
 
-      if (i === 0) add += 5;      // 1位
-      else if (i === 1) add += 3; // 2位
-      else if (i === 2) add += 1; // 3位
+      if (i === 0) add += 5;
+      else if (i === 1) add += 3;
+      else if (i === 2) add += 1;
 
-      const newScore = pInfo.score + add;
+      const newScore = (pInfo.score || 0) + add;
       players[p.pid].score = newScore;
 
       await FS.updateDoc(
@@ -666,7 +695,6 @@ async function admin_showRanking(qid, correct) {
     }
   }
 
-  // この問題はスコア計算済みとしてマーク
   const newScored = { ...scoredQuestions, [qid]: true };
 
   const newState = {
@@ -677,19 +705,13 @@ async function admin_showRanking(qid, correct) {
     ranking,
     scoredQuestions: newScored
   };
-  // deadline, votes は不要なので消しておく（表示に影響しないが整理用）
-  delete newState.deadline;
-  delete newState.votes;
 
-  await FS.setDoc(
-    roomRef,
-    { state: newState },
-    { merge: true }
-  );
+  await FS.setDoc(roomRef, { state: newState }, { merge: true });
 }
 
 /*******************************************************
  * ⑨ admin：最終結果ランキング（総合得点）
+ *  → 参加者（ここでは「最近参加＋1問以上回答した人」）だけ
  *******************************************************/
 async function admin_showFinalRanking() {
   if (!FS) { alert("読み込み中です"); return; }
@@ -698,13 +720,18 @@ async function admin_showFinalRanking() {
     FS.collection(db, "rooms", ROOM_ID, "players")
   );
 
+  const now = Date.now();
+  const cutoff = now - 24 * 60 * 60 * 1000; // 過去24時間以内に参加した人だけ対象
+
   const list = [];
   playersSnap.forEach(pdoc => {
     const pdata = pdoc.data();
     const participated = pdata.participated || 0;
+    const joinedAt = typeof pdata.joinedAt === "number" ? pdata.joinedAt : 0;
 
-    // 1問も参加していない（古いテストデータなど）は除外
+    // 1問も参加していない or 昔すぎる参加者は除外（古いテストデータ対策）
     if (participated <= 0) return;
+    if (joinedAt && joinedAt < cutoff) return;
 
     list.push({
       name: pdata.name || "名無し",
@@ -726,7 +753,7 @@ async function admin_showFinalRanking() {
     return;
   }
 
-  // スコアの高い順
+  // スコア高い順（1位〜）
   list.sort((a, b) => b.totalScore - a.totalScore);
 
   const finalRanking = list.map((p, idx) => ({
@@ -792,6 +819,7 @@ window.addEventListener("load", () => {
     listenState();
   }
 });
+
 
 
 
