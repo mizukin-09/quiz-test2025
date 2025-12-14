@@ -1,19 +1,21 @@
 /*******************************************************
- * script.js（修正版フルコード：最終結果ランキング修正版）
- *  - 参加者：スマホから回答
- *  - question.html：問題表示＋10秒カウントダウン＋投票数＋正解表示＋ランキング
- *  - admin.html：出題／選択肢表示開始／投票数表示／正解発表／正解者ランキング／最終結果
+ * script.js（フルコード：2025-12-14 最終結果修正版）
+ *  - index.html   : 参加者用（スマホ）
+ *  - question.html: 画面共有用
+ *  - admin.html   : 司会・進行用
  *******************************************************/
 
 const ROOM_ID = "roomA";
 
+// Firebase 参照（各 HTML の <script type="module"> でセット）
 let db = null;
 let FS = null;
 
+// 参加者の情報（ブラウザに保存）
 let playerId = localStorage.getItem("playerId");
 let playerName = localStorage.getItem("playerName");
 
-// ページ判定
+// どの画面か判定
 const isIndex    = !!document.getElementById("joinBtn");
 const isQuestion = !!document.getElementById("screenQuestionText");
 const isAdmin    = !!document.getElementById("adminPanel");
@@ -23,20 +25,23 @@ const nameInput   = document.getElementById("nameInput");
 const waitingArea = document.getElementById("waitingArea");
 const choicesDiv  = document.getElementById("choices");
 
-// question 用
-let countdownInterval = null;
+// タイマー関連
+let countdownInterval   = null;
 let countdownQuestionId = null;
-let countdownLocked = false;
+let countdownLocked     = false;
 
+// ランキング表示用
 let rankingInterval = null;
 
 /*******************************************************
- * Utility
+ * 共通ユーティリティ
  *******************************************************/
 function makeId(len = 10) {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let s = "";
-  for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < len; i++) {
+    s += chars[Math.floor(Math.random() * chars.length)];
+  }
   return s;
 }
 
@@ -57,7 +62,7 @@ function toMillis(t) {
 async function joinGame() {
   if (!isIndex) return;
   if (!FS) {
-    alert("読み込み中です。少し待ってからもう一度お試しください");
+    alert("読み込み中です。数秒待ってから再度お試しください。");
     return;
   }
 
@@ -74,26 +79,27 @@ async function joinGame() {
   playerName = name;
   localStorage.setItem("playerName", name);
 
+  // プレイヤー登録（初回以降は merge）
   await FS.setDoc(
     FS.doc(db, "rooms", ROOM_ID, "players", playerId),
     {
       name,
       score: 0,
-      participated: 0,   // 参加回数（今後も使えるよう残しておく）
+      participated: 0,
       joinedAt: Date.now()
     },
     { merge: true }
   );
 
-  nameInput.style.display = "none";
-  document.getElementById("joinBtn").style.display = "none";
+  // 参加 UI を隠して待機エリア表示
+  document.getElementById("joinArea").style.display = "none";
   if (waitingArea) waitingArea.style.display = "block";
 
   listenState();
 }
 
 /*******************************************************
- * ② Firestore state 監視（index & question 共通）
+ * ② 全画面共通：state を監視
  *******************************************************/
 let unState = null;
 
@@ -101,29 +107,31 @@ function listenState() {
   if (!FS) return;
   if (unState) unState();
 
-  unState = FS.onSnapshot(FS.doc(db, "rooms", ROOM_ID), async (snap) => {
+  const roomRef = FS.doc(db, "rooms", ROOM_ID);
+
+  unState = FS.onSnapshot(roomRef, async (snap) => {
     if (!snap.exists()) {
       if (isQuestion) updateScreen({ phase: "waiting" });
       return;
     }
-    const st = snap.data().state;
-    if (!st) {
+    const state = snap.data().state;
+    if (!state) {
       if (isQuestion) updateScreen({ phase: "waiting" });
       return;
     }
 
-    const { phase, currentQuestion, correct } = st;
+    const { phase, currentQuestion, correct } = state;
 
-    // --- index（参加者） ---
+    // 参加者画面の挙動
     if (isIndex) {
       if (phase === "waiting" || phase === "intro") {
-        waitingArea.style.display = "block";
-        choicesDiv.innerHTML = "";
+        if (waitingArea) waitingArea.style.display = "block";
+        if (choicesDiv) choicesDiv.innerHTML = "";
         return;
       }
 
       if (phase === "question") {
-        waitingArea.style.display = "none";
+        if (waitingArea) waitingArea.style.display = "none";
         renderChoices(currentQuestion);
         return;
       }
@@ -144,9 +152,9 @@ function listenState() {
       }
     }
 
-    // --- question（画面共有側） ---
+    // 画面共有（question.html）の挙動
     if (isQuestion) {
-      updateScreen(st);
+      updateScreen(state);
     }
   });
 }
@@ -156,9 +164,8 @@ function listenState() {
  *******************************************************/
 async function renderChoices(qid) {
   if (!FS) return;
-  const qSnap = await FS.getDoc(
-    FS.doc(db, "rooms", ROOM_ID, "questions", String(qid))
-  );
+  const qRef = FS.doc(db, "rooms", ROOM_ID, "questions", String(qid));
+  const qSnap = await FS.getDoc(qRef);
   if (!qSnap.exists()) {
     choicesDiv.innerHTML = "<p>問題データがありません</p>";
     return;
@@ -172,10 +179,11 @@ async function renderChoices(qid) {
     btn.textContent = `${idx + 1}. ${opt}`;
     btn.onclick = () => answer(idx + 1);
 
+    // スマホでも押しやすいように少し大きめ
     btn.style.display = "block";
     btn.style.width = "100%";
-    btn.style.fontSize = "20px";
-    btn.style.padding = "12px";
+    btn.style.fontSize = "18px";
+    btn.style.padding = "10px 12px";
     btn.style.margin = "8px 0";
     btn.style.borderRadius = "6px";
     btn.style.border = "2px solid #ccc";
@@ -192,8 +200,10 @@ async function renderChoices(qid) {
 async function answer(optIdx) {
   if (!FS) return;
 
-  const stSnap = await FS.getDoc(FS.doc(db, "rooms", ROOM_ID));
-  const st = stSnap.data().state;
+  const roomRef = FS.doc(db, "rooms", ROOM_ID);
+  const stSnap  = await FS.getDoc(roomRef);
+  const st      = stSnap.exists() ? stSnap.data().state : null;
+
   if (!st || st.phase !== "question") {
     alert("回答時間が終了しています");
     disableChoices();
@@ -202,7 +212,7 @@ async function answer(optIdx) {
 
   disableChoices();
 
-  // 自分が押した選択肢を青枠、それ以外を薄く
+  // 自分が押した選択肢を青枠・その他を薄く
   document.querySelectorAll(".choiceBtn").forEach((btn, idx) => {
     if (idx + 1 === optIdx) {
       btn.style.border = "4px solid #0066ff";
@@ -229,7 +239,9 @@ async function answer(optIdx) {
 }
 
 function disableChoices() {
-  document.querySelectorAll(".choiceBtn").forEach((b) => (b.disabled = true));
+  document.querySelectorAll(".choiceBtn").forEach((b) => {
+    b.disabled = true;
+  });
 }
 
 function showIndexCorrect(correct) {
@@ -249,8 +261,9 @@ function showIndexCorrect(correct) {
 /*******************************************************
  * ⑤ question：画面更新
  *******************************************************/
-async function updateScreen(st) {
+async function updateScreen(state) {
   if (!FS) return;
+
   const {
     currentQuestion,
     phase,
@@ -259,7 +272,7 @@ async function updateScreen(st) {
     deadline,
     ranking,
     finalRanking
-  } = st;
+  } = state;
 
   const qt        = document.getElementById("screenQuestionText");
   const list      = document.getElementById("screenChoices");
@@ -267,12 +280,12 @@ async function updateScreen(st) {
   const imgEl     = document.getElementById("screenImage");
   const rankingEl = document.getElementById("screenRanking");
 
-  // --- waiting：背景のみ ---
+  // 待機画面：背景だけ
   if (phase === "waiting") {
-    if (qt) { qt.textContent = ""; qt.style.display = "none"; }
-    if (list) { list.innerHTML = ""; list.style.display = "none"; }
+    if (qt)      { qt.textContent = ""; qt.style.display = "none"; }
+    if (list)    { list.innerHTML = ""; list.style.display = "none"; }
     if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
-    if (imgEl) imgEl.style.display = "none";
+    if (imgEl)   { imgEl.style.display = "none"; }
     if (rankingEl) { rankingEl.innerHTML = ""; rankingEl.style.display = "none"; }
     stopCountdown();
     stopRankingAnimation();
@@ -286,44 +299,43 @@ async function updateScreen(st) {
     rankingEl.style.display = "none";
   }
 
-  // --- 最終結果 ---
+  // 最終結果
   if (phase === "finalRanking") {
-    if (qt) { qt.textContent = "最終結果発表"; qt.style.display = "block"; }
-    if (list) { list.innerHTML = ""; list.style.display = "none"; }
+    if (qt)      { qt.textContent = "最終結果発表"; qt.style.display = "block"; }
+    if (list)    { list.innerHTML = ""; list.style.display = "none"; }
     if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
-    if (imgEl) imgEl.style.display = "none";
+    if (imgEl)   { imgEl.style.display = "none"; }
     if (rankingEl) rankingEl.style.display = "block";
     showFinalRanking(finalRanking || []);
     return;
   }
 
-  // --- 各問の正解者ランキング ---
+  // 各問の正解者ランキング
   if (phase === "ranking") {
-    if (qt) { qt.textContent = "正解者ランキング（上位10名）"; qt.style.display = "block"; }
-    if (list) { list.innerHTML = ""; list.style.display = "none"; }
+    if (qt)      { qt.textContent = "正解者ランキング（上位10名）"; qt.style.display = "block"; }
+    if (list)    { list.innerHTML = ""; list.style.display = "none"; }
     if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
-    if (imgEl) imgEl.style.display = "none";
+    if (imgEl)   { imgEl.style.display = "none"; }
     if (rankingEl) rankingEl.style.display = "block";
     startRankingAnimation(ranking || []);
     return;
   }
 
-  // --- intro / question / closed / votes / result ---
-  const qSnap = await FS.getDoc(
-    FS.doc(db, "rooms", ROOM_ID, "questions", String(currentQuestion))
-  );
+  // ここからは intro / question / closed / votes / result
+  const qRef  = FS.doc(db, "rooms", ROOM_ID, "questions", String(currentQuestion));
+  const qSnap = await FS.getDoc(qRef);
   if (!qSnap.exists()) {
-    if (qt) { qt.textContent = "問題データがありません"; qt.style.display = "block"; }
-    if (list) { list.innerHTML = ""; list.style.display = "none"; }
+    if (qt)      { qt.textContent = "問題データがありません"; qt.style.display = "block"; }
+    if (list)    { list.innerHTML = ""; list.style.display = "none"; }
     if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
-    if (imgEl) imgEl.style.display = "none";
+    if (imgEl)   { imgEl.style.display = "none"; }
     stopCountdown();
     return;
   }
   const q = qSnap.data();
 
-  if (qt) { qt.textContent = q.text || ""; qt.style.display = "block"; }
-  if (list) { list.innerHTML = ""; list.style.display = "block"; }
+  if (qt)      { qt.textContent = q.text || ""; qt.style.display = "block"; }
+  if (list)    { list.innerHTML = ""; list.style.display = "block"; }
   if (timerEl) timerEl.style.display = "block";
 
   if (imgEl) {
@@ -335,13 +347,14 @@ async function updateScreen(st) {
     }
   }
 
-  // intro：タイマーも非表示
+  // intro：カウントダウンなし
   if (phase === "intro") {
     if (timerEl) timerEl.textContent = "";
     stopCountdown();
     return;
   }
 
+  // question：カウントダウン開始
   if (phase === "question" && typeof deadline === "number") {
     startCountdown(currentQuestion, deadline);
   } else {
@@ -352,6 +365,7 @@ async function updateScreen(st) {
     }
   }
 
+  // 選択肢表示
   (q.options || []).forEach((opt, idx) => {
     const div = document.createElement("div");
     div.className = "screenChoice";
@@ -364,7 +378,8 @@ async function updateScreen(st) {
     div.style.opacity = "1";
 
     if (phase === "votes" && votes) {
-      div.textContent = `${idx + 1}. ${opt}（${votes[idx + 1] || 0}票）`;
+      const v = votes[idx + 1] || 0;
+      div.textContent = `${idx + 1}. ${opt}（${v}票）`;
     }
 
     if (phase === "result") {
@@ -396,15 +411,16 @@ function startCountdown(qid, deadlineMs) {
   if (countdownInterval) return;
 
   function tick() {
-    const now = Date.now();
+    const now      = Date.now();
     const remainMs = deadlineMs - now;
-    const sec = Math.max(0, Math.ceil(remainMs / 1000));
+    const sec      = Math.max(0, Math.ceil(remainMs / 1000));
     timerEl.textContent = `残り ${sec} 秒`;
 
     if (remainMs <= 0) {
       timerEl.textContent = "時間終了！";
       stopCountdown();
 
+      // 一度だけ phase を closed にする
       if (!countdownLocked && FS) {
         countdownLocked = true;
         FS.setDoc(
@@ -428,8 +444,8 @@ function stopCountdown() {
 }
 
 /*******************************************************
- * ⑦ question：正解者ランキング（10位→1位を
- *     画面下から上に積み上げて表示）
+ * ⑦ question：正解者ランキング（10位→1位）
+ *     画面下から上へ積み上げる表示
  *******************************************************/
 function startRankingAnimation(ranking) {
   const rankingEl = document.getElementById("screenRanking");
@@ -442,25 +458,24 @@ function startRankingAnimation(ranking) {
     return;
   }
 
-  // rank 昇順（1位〜）でソート
+  // rank 昇順（1位〜）にソート
   const sorted = ranking.slice().sort((a, b) => a.rank - b.rank);
 
-  // 一番下の順位（例：10位）から表示開始
+  // 一番下の順位から表示
   let idx = sorted.length - 1;
 
   rankingEl.innerHTML = `
     <h2 style="text-align:center; font-size: 36px; margin-bottom: 16px;">
       正解者ランキング（上位10名）
     </h2>
-    <div id="rankingContainer"
-         style="
-           margin: 0 auto;
-           width: 60%;
-           height: 60vh;
-           display: flex;
-           flex-direction: column;
-           justify-content: flex-end;
-         ">
+    <div style="
+      margin: 0 auto;
+      width: 60%;
+      height: 60vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    ">
       <ol id="rankingList" style="list-style:none; margin:0; padding:0;"></ol>
     </div>
   `;
@@ -472,15 +487,15 @@ function startRankingAnimation(ranking) {
       stopRankingAnimation();
       return;
     }
-    const p = sorted[idx--];               // 下位 → 上位
+    const p   = sorted[idx--]; // 下位 → 上位
     const sec = ((p.timeMs || 0) / 1000).toFixed(2);
 
-    const li = document.createElement("li");
+    const li  = document.createElement("li");
     li.textContent = `${p.rank}位：${p.name}（${sec}秒）`;
-    li.style.margin = "6px 0";
+    li.style.margin   = "6px 0";
     li.style.fontSize = "26px";
 
-    // ★常にリストの先頭に追加 → 下から積み上がって見える
+    // 先頭に追加 → 下から積み上がって見える
     if (listEl.firstChild) {
       listEl.insertBefore(li, listEl.firstChild);
     } else {
@@ -488,9 +503,7 @@ function startRankingAnimation(ranking) {
     }
   }
 
-  // 最初の1件を即表示
-  step();
-  // 以降、1秒おきに次の順位を追加
+  step();                    // 最初の1件
   rankingInterval = setInterval(step, 1000);
 }
 
@@ -502,19 +515,69 @@ function stopRankingAnimation() {
 }
 
 /*******************************************************
- * ⑧ admin：出題系（intro / question / votes / result）
+ * ⑧ question：最終結果表示（静的に全員分を表示）
+ *******************************************************/
+function showFinalRanking(finalRanking) {
+  const rankingEl = document.getElementById("screenRanking");
+  if (!rankingEl) return;
+
+  stopRankingAnimation();
+
+  if (!Array.isArray(finalRanking) || finalRanking.length === 0) {
+    rankingEl.innerHTML = "<h2>最終結果：スコアデータがありません</h2>";
+    return;
+  }
+
+  // rank が 1位〜 の昇順になっている前提で、下位から表示
+  const sorted = finalRanking.slice().sort((a, b) => a.rank - b.rank);
+
+  let html = `
+    <h2 style="text-align:center; font-size: 36px; margin-bottom: 16px;">
+      最終結果ランキング
+    </h2>
+    <div style="
+      margin: 0 auto;
+      width: 60%;
+      height: 60vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    ">
+      <ol style="list-style:none; margin:0; padding:0;">
+  `;
+
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const p = sorted[i];
+    html += `
+      <li style="margin:6px 0; font-size:26px;">
+        ${p.rank}位：${p.name}（${p.totalScore}点）
+      </li>
+    `;
+  }
+
+  html += `
+      </ol>
+    </div>
+  `;
+
+  rankingEl.innerHTML = html;
+}
+
+/*******************************************************
+ * ⑨ admin：出題系（intro / question / votes / result）
  *******************************************************/
 async function admin_showIntro(qid) {
   if (!FS) { alert("読み込み中です"); return; }
 
+  // 回答リセット
   await FS.setDoc(
     FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)),
     {}
   );
 
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
-  const snap = await FS.getDoc(roomRef);
-  const state = snap.exists() ? (snap.data().state || {}) : {};
+  const snap    = await FS.getDoc(roomRef);
+  const state   = snap.exists() ? (snap.data().state || {}) : {};
 
   const newState = {
     ...state,
@@ -532,14 +595,15 @@ async function admin_showIntro(qid) {
 async function admin_startQuestion(qid) {
   if (!FS) { alert("読み込み中です"); return; }
 
+  // 回答リセット
   await FS.setDoc(
     FS.doc(db, "rooms", ROOM_ID, "answers", String(qid)),
     {}
   );
 
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
-  const snap = await FS.getDoc(roomRef);
-  const state = snap.exists() ? (snap.data().state || {}) : {};
+  const snap    = await FS.getDoc(roomRef);
+  const state   = snap.exists() ? (snap.data().state || {}) : {};
 
   const newState = {
     ...state,
@@ -548,7 +612,7 @@ async function admin_startQuestion(qid) {
     correct: null,
     votes: { 1: 0, 2: 0, 3: 0, 4: 0 },
     startTime: FS.serverTimestamp(),
-    deadline: Date.now() + 10000
+    deadline: Date.now() + 10000   // 10秒後
   };
 
   await FS.setDoc(roomRef, { state: newState }, { merge: true });
@@ -557,13 +621,12 @@ async function admin_startQuestion(qid) {
 async function admin_showVotes(qid) {
   if (!FS) { alert("読み込み中です"); return; }
 
-  const answersSnap = await FS.getDoc(
-    FS.doc(db, "rooms", ROOM_ID, "answers", String(qid))
-  );
-  const data = answersSnap.exists() ? answersSnap.data() : {};
+  const ansRef = FS.doc(db, "rooms", ROOM_ID, "answers", String(qid));
+  const ansSnap = await FS.getDoc(ansRef);
+  const data = ansSnap.exists() ? ansSnap.data() : {};
 
   const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
-  for (let pid in data) {
+  for (const pid in data) {
     const entry = data[pid];
     if (!entry || typeof entry !== "object") continue;
     const v = entry.option;
@@ -571,8 +634,8 @@ async function admin_showVotes(qid) {
   }
 
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
-  const snap = await FS.getDoc(roomRef);
-  const state = snap.exists() ? (snap.data().state || {}) : {};
+  const snap    = await FS.getDoc(roomRef);
+  const state   = snap.exists() ? (snap.data().state || {}) : {};
 
   const newState = {
     ...state,
@@ -589,8 +652,8 @@ async function admin_reveal(qid, correct) {
   if (!FS) { alert("読み込み中です"); return; }
 
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
-  const snap = await FS.getDoc(roomRef);
-  const state = snap.exists() ? (snap.data().state || {}) : {};
+  const snap    = await FS.getDoc(roomRef);
+  const state   = snap.exists() ? (snap.data().state || {}) : {};
 
   const newState = {
     ...state,
@@ -603,7 +666,7 @@ async function admin_reveal(qid, correct) {
 }
 
 /*******************************************************
- * ⑨ admin：正解者ランキング＋得点加算
+ * ⑩ admin：正解者ランキング ＋ 得点加算
  *******************************************************/
 async function admin_showRanking(qid, correct) {
   if (!FS) { alert("読み込み中です"); return; }
@@ -611,17 +674,17 @@ async function admin_showRanking(qid, correct) {
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
   const roomSnap = await FS.getDoc(roomRef);
   const roomData = roomSnap.exists() ? roomSnap.data() : {};
-  const state = roomData.state || {};
+  const state    = roomData.state || {};
   const startTimeMs = toMillis(state.startTime);
   const scoredQuestions = state.scoredQuestions || {};
+  const alreadyScored   = !!scoredQuestions[qid];
 
-  const alreadyScored = !!scoredQuestions[qid];
+  // 回答一覧
+  const ansRef  = FS.doc(db, "rooms", ROOM_ID, "answers", String(qid));
+  const ansSnap = await FS.getDoc(ansRef);
+  const answers = ansSnap.exists() ? ansSnap.data() : {};
 
-  const answersSnap = await FS.getDoc(
-    FS.doc(db, "rooms", ROOM_ID, "answers", String(qid))
-  );
-  const answers = answersSnap.exists() ? answersSnap.data() : {};
-
+  // プレイヤー一覧
   const playersSnap = await FS.getDocs(
     FS.collection(db, "rooms", ROOM_ID, "players")
   );
@@ -630,40 +693,41 @@ async function admin_showRanking(qid, correct) {
     const pdata = pdoc.data();
     players[pdoc.id] = {
       name: pdata.name || "名無し",
-      score: pdata.score || 0,
-      participated: pdata.participated || 0
+      score: typeof pdata.score === "number" ? pdata.score : 0,
+      participated: typeof pdata.participated === "number" ? pdata.participated : 0
     };
   });
 
-  const tmpList = [];
+  // 正解者だけ抽出
+  const correctList = [];
   for (const pid in answers) {
     const entry = answers[pid];
     if (!entry || typeof entry !== "object") continue;
     if (entry.option !== correct) continue;
 
-    const ansMs = toMillis(entry.time);
-    if (ansMs == null || startTimeMs == null) continue;
+    const t = toMillis(entry.time);
+    if (t == null || startTimeMs == null) continue;
 
-    const elapsedMs = Math.max(0, ansMs - startTimeMs);
-
-    tmpList.push({
+    correctList.push({
       pid,
       name: players[pid] ? players[pid].name : "名無し",
-      timeMs: elapsedMs
+      timeMs: Math.max(0, t - startTimeMs)
     });
   }
 
-  tmpList.sort((a, b) => a.timeMs - b.timeMs);
+  // 早い順にソート
+  correctList.sort((a, b) => a.timeMs - b.timeMs);
 
-  const ranking = tmpList.slice(0, 10).map((p, idx) => ({
+  // 上位10名までランキング配列を作る
+  const ranking = correctList.slice(0, 10).map((p, idx) => ({
     rank: idx + 1,
     name: p.name,
     timeMs: p.timeMs
   }));
 
-  // 得点加算（まだなら）
+  // まだ得点計算していなければ得点を反映
   if (!alreadyScored) {
-    // 参加フラグ
+    // 参加フラグ（回答した人すべて）
     for (const pid in answers) {
       const pInfo = players[pid];
       if (!pInfo) continue;
@@ -676,11 +740,11 @@ async function admin_showRanking(qid, correct) {
       );
     }
 
-    // 正解者に得点
-    for (let i = 0; i < tmpList.length; i++) {
-      const p = tmpList[i];
+    // 正解者への点数（全員＋10点、先着 1〜3位 にボーナス）
+    for (let i = 0; i < correctList.length; i++) {
+      const p = correctList[i];
       const pInfo = players[p.pid] || { score: 0 };
-      let add = 10;               // 正解者全員に10点
+      let add = 10;
 
       if (i === 0) add += 5;      // 1位 +5
       else if (i === 1) add += 3; // 2位 +3
@@ -711,72 +775,69 @@ async function admin_showRanking(qid, correct) {
 }
 
 /*******************************************************
- * ⑩ admin：最終結果ランキング（全参加者をスコア順）
+ * ⑪ admin：最終結果ランキング（players.score から）
  *******************************************************/
 async function admin_showFinalRanking() {
   if (!FS) { alert("読み込み中です"); return; }
+
+  const roomRef  = FS.doc(db, "rooms", ROOM_ID);
+  const roomSnap = await FS.getDoc(roomRef);
+  const roomData = roomSnap.exists() ? roomSnap.data() : {};
+  const state    = roomData.state || {};
 
   const playersSnap = await FS.getDocs(
     FS.collection(db, "rooms", ROOM_ID, "players")
   );
 
-  const list = [];
+  const players = [];
   playersSnap.forEach(pdoc => {
     const pdata = pdoc.data();
-    // 参加回数に関係なく、全員を対象にする
-    const score = typeof pdata.score === "number" ? pdata.score : 0;
-
-    list.push({
+    const score =
+      typeof pdata.score === "number"
+        ? pdata.score
+        : 0;
+    players.push({
       name: pdata.name || "名無し",
       totalScore: score
     });
   });
 
-  // プレイヤーが1人もいない場合だけ空データ
-  if (list.length === 0) {
+  if (players.length === 0) {
     await FS.setDoc(
-      FS.doc(db, "rooms", ROOM_ID),
-      {
-        state: {
-          phase: "finalRanking",
-          finalRanking: []
-        }
-      },
+      roomRef,
+      { state: { phase: "finalRanking", finalRanking: [] } },
       { merge: true }
     );
     return;
   }
 
-  // 総得点の降順で並べる（1位が一番スコアが高い）
-  list.sort((a, b) => b.totalScore - a.totalScore);
+  // スコアの降順（高得点が上位）
+  players.sort((a, b) => b.totalScore - a.totalScore);
 
-  const finalRanking = list.map((p, idx) => ({
+  const finalRanking = players.map((p, idx) => ({
     rank: idx + 1,
     name: p.name,
     totalScore: p.totalScore
   }));
 
-  await FS.setDoc(
-    FS.doc(db, "rooms", ROOM_ID),
-    {
-      state: {
-        phase: "finalRanking",
-        finalRanking
-      }
-    },
-    { merge: true }
-  );
+  const newState = {
+    ...state,
+    phase: "finalRanking",
+    finalRanking
+  };
+
+  await FS.setDoc(roomRef, { state: newState }, { merge: true });
 }
 
 /*******************************************************
- * ⑪ admin：待機画面へ戻す
+ * ⑫ admin：待機画面（背景のみ表示）に戻す
  *******************************************************/
 async function admin_resetScreen() {
   if (!FS) { alert("読み込み中です"); return; }
 
   const roomRef = FS.doc(db, "rooms", ROOM_ID);
-  const snap = await FS.getDoc(roomRef);
-  const state = snap.exists() ? (snap.data().state || {}) : {};
+  const snap    = await FS.getDoc(roomRef);
+  const state   = snap.exists() ? (snap.data().state || {}) : {};
 
   const newState = {
     ...state,
@@ -792,7 +853,7 @@ async function admin_resetScreen() {
 }
 
 /*******************************************************
- * ⑫ Firebase 初期化受け取り
+ * ⑬ Firebase 初期化を受け取って開始
  *******************************************************/
 window.addEventListener("load", () => {
   db = window.firebaseDB;
@@ -803,16 +864,19 @@ window.addEventListener("load", () => {
     return;
   }
 
-  // 参加画面：前回の名前があれば再表示
-  if (isIndex && playerName && nameInput) {
-    nameInput.value = playerName;
-  }
-
   // question 画面は常に state を監視
   if (isQuestion) {
     listenState();
   }
+
+  // 参加画面は、前に参加した名前があれば自動セット
+  if (isIndex) {
+    if (playerName && nameInput) {
+      nameInput.value = playerName;
+    }
+  }
 });
+
 
 
 
