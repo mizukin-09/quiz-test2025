@@ -1,5 +1,5 @@
 /*******************************************************
- * script.js（フルコード：最終結果ランキング表示修正版）
+ * script.js（フルコード：最終結果ランキング計算 & 表示修正版）
  *  - index.html   : 参加者用（スマホ）
  *  - question.html: 画面共有用
  *  - admin.html   : 司会・進行用
@@ -92,7 +92,8 @@ async function joinGame() {
   );
 
   // 参加 UI を隠して待機エリア表示
-  document.getElementById("joinArea").style.display = "none";
+  const joinArea = document.getElementById("joinArea");
+  if (joinArea) joinArea.style.display = "none";
   if (waitingArea) waitingArea.style.display = "block";
 
   listenState();
@@ -279,8 +280,30 @@ async function updateScreen(state) {
   const timerEl   = document.getElementById("screenTimer");
   const imgEl     = document.getElementById("screenImage");
   const rankingEl = document.getElementById("screenRanking");
-  const titleEl   = document.getElementById("rankingTitle");
-  const listEl    = document.getElementById("rankingList");
+
+  // ランキング用要素（なければここで作る）
+  let titleEl = document.getElementById("rankingTitle");
+  let listEl  = document.getElementById("rankingList");
+  if (rankingEl && (!titleEl || !listEl)) {
+    rankingEl.innerHTML = "";
+    titleEl = document.createElement("div");
+    titleEl.id = "rankingTitle";
+    titleEl.style.fontSize = "32px";
+    titleEl.style.marginBottom = "16px";
+    titleEl.style.textAlign = "center";
+
+    listEl = document.createElement("ol");
+    listEl.id = "rankingList";
+    listEl.style.listStyle = "none";
+    listEl.style.padding = "0";
+    listEl.style.margin = "0";
+    listEl.style.display = "flex";
+    listEl.style.flexDirection = "column";
+    listEl.style.justifyContent = "flex-end";
+
+    rankingEl.appendChild(titleEl);
+    rankingEl.appendChild(listEl);
+  }
 
   // 待機画面：背景だけ
   if (phase === "waiting") {
@@ -308,7 +331,7 @@ async function updateScreen(state) {
 
   // 最終結果
   if (phase === "finalRanking") {
-    if (qt)      { qt.textContent = "最終結果発表"; qt.style.display = "block"; }
+    if (qt)      { qt.textContent = ""; qt.style.display = "none"; } // 左上タイトルを非表示
     if (list)    { list.innerHTML = ""; list.style.display = "none"; }
     if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
     if (imgEl)   { imgEl.style.display = "none"; }
@@ -451,14 +474,35 @@ function stopCountdown() {
 }
 
 /*******************************************************
- * ⑦ question：正解者ランキング（10位→1位）
- *     画面下から上へ積み上げる表示
+ * ⑦ question：正解者ランキング（10位→1位 アニメ）
  *******************************************************/
 function startRankingAnimation(ranking) {
   const overlay = document.getElementById("screenRanking");
-  const titleEl = document.getElementById("rankingTitle");
-  const listEl  = document.getElementById("rankingList");
-  if (!overlay || !titleEl || !listEl) return;
+  if (!overlay) return;
+
+  // タイトル＆リスト要素を確保
+  let titleEl = document.getElementById("rankingTitle");
+  let listEl  = document.getElementById("rankingList");
+  if (!titleEl || !listEl) {
+    overlay.innerHTML = "";
+    titleEl = document.createElement("div");
+    titleEl.id = "rankingTitle";
+    titleEl.style.fontSize = "32px";
+    titleEl.style.marginBottom = "16px";
+    titleEl.style.textAlign = "center";
+
+    listEl = document.createElement("ol");
+    listEl.id = "rankingList";
+    listEl.style.listStyle = "none";
+    listEl.style.padding = "0";
+    listEl.style.margin = "0";
+    listEl.style.display = "flex";
+    listEl.style.flexDirection = "column";
+    listEl.style.justifyContent = "flex-end";
+
+    overlay.appendChild(titleEl);
+    overlay.appendChild(listEl);
+  }
 
   stopRankingAnimation();
 
@@ -490,8 +534,6 @@ function startRankingAnimation(ranking) {
     const li  = document.createElement("li");
     li.textContent = `${p.rank}位：${p.name}（${sec}秒）`;
 
-    // flex-direction: column + justify-content:flex-end なので
-    // 下から積み上がるように appendChild でOK
     listEl.appendChild(li);
   }
 
@@ -507,13 +549,35 @@ function stopRankingAnimation() {
 }
 
 /*******************************************************
- * ⑧ question：最終結果表示（静的に全員分を表示）
+ * ⑧ question：最終結果表示（全員分を表示 ・ 1位が一番上）
  *******************************************************/
 function showFinalRanking(finalRanking) {
   const overlay = document.getElementById("screenRanking");
-  const titleEl = document.getElementById("rankingTitle");
-  const listEl  = document.getElementById("rankingList");
-  if (!overlay || !titleEl || !listEl) return;
+  if (!overlay) return;
+
+  // タイトル＆リスト要素を確保
+  let titleEl = document.getElementById("rankingTitle");
+  let listEl  = document.getElementById("rankingList");
+  if (!titleEl || !listEl) {
+    overlay.innerHTML = "";
+    titleEl = document.createElement("div");
+    titleEl.id = "rankingTitle";
+    titleEl.style.fontSize = "32px";
+    titleEl.style.marginBottom = "16px";
+    titleEl.style.textAlign = "center";
+
+    listEl = document.createElement("ol");
+    listEl.id = "rankingList";
+    listEl.style.listStyle = "none";
+    listEl.style.padding = "0";
+    listEl.style.margin = "0";
+    listEl.style.display = "flex";
+    listEl.style.flexDirection = "column";
+    listEl.style.justifyContent = "flex-end";
+
+    overlay.appendChild(titleEl);
+    overlay.appendChild(listEl);
+  }
 
   stopRankingAnimation();
 
@@ -527,15 +591,14 @@ function showFinalRanking(finalRanking) {
 
   titleEl.textContent = "最終結果ランキング";
 
-  // rank が 1位〜 の昇順になっている前提で、下位から表示
+  // rank が 1位〜 の昇順で、そのまま上から 1位,2位,... と表示
   const sorted = finalRanking.slice().sort((a, b) => a.rank - b.rank);
 
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const p = sorted[i];
+  sorted.forEach((p) => {
     const li = document.createElement("li");
     li.textContent = `${p.rank}位：${p.name}（${p.totalScore}点）`;
     listEl.appendChild(li);
-  }
+  });
 }
 
 /*******************************************************
@@ -750,7 +813,7 @@ async function admin_showRanking(qid, correct) {
 }
 
 /*******************************************************
- * ⑪ admin：最終結果ランキング（players.score から）
+ * ⑪ admin：最終結果ランキング（answers から集計し直す）
  *******************************************************/
 async function admin_showFinalRanking() {
   if (!FS) { alert("読み込み中です"); return; }
@@ -760,24 +823,77 @@ async function admin_showFinalRanking() {
   const roomData = roomSnap.exists() ? roomSnap.data() : {};
   const state    = roomData.state || {};
 
+  // 参加者一覧を先に取得しておく
   const playersSnap = await FS.getDocs(
     FS.collection(db, "rooms", ROOM_ID, "players")
   );
-
-  const players = [];
+  const players = {};
   playersSnap.forEach(pdoc => {
     const pdata = pdoc.data();
-    const score =
-      typeof pdata.score === "number"
-        ? pdata.score
-        : 0;
-    players.push({
+    players[pdoc.id] = {
       name: pdata.name || "名無し",
-      totalScore: score
-    });
+      totalScore: 0
+    };
   });
 
-  if (players.length === 0) {
+  // 指定した最大問題数までを集計（必要に応じて変更）
+  const MAX_QID = 10;
+
+  for (let qid = 1; qid <= MAX_QID; qid++) {
+    const qRef  = FS.doc(db, "rooms", ROOM_ID, "questions", String(qid));
+    const qSnap = await FS.getDoc(qRef);
+    if (!qSnap.exists()) continue;
+    const qData   = qSnap.data();
+    const correct = qData.correct;
+    if (typeof correct !== "number") continue;
+
+    const ansRef  = FS.doc(db, "rooms", ROOM_ID, "answers", String(qid));
+    const ansSnap = await FS.getDoc(ansRef);
+    const answers = ansSnap.exists() ? ansSnap.data() : {};
+
+    // この問題の正解者だけを抽出し、回答時間でソート
+    const correctList = [];
+    for (const pid in answers) {
+      const entry = answers[pid];
+      if (!entry || typeof entry !== "object") continue;
+      if (entry.option !== correct) continue;
+
+      const t = toMillis(entry.time);
+      if (t == null) continue;
+
+      // 参加者一覧に存在しないIDの場合も念のため登録
+      if (!players[pid]) {
+        players[pid] = { name: "名無し", totalScore: 0 };
+      }
+
+      correctList.push({
+        pid,
+        timeMs: t
+      });
+    }
+
+    // 早押し順（時間が小さい = 早い）
+    correctList.sort((a, b) => a.timeMs - b.timeMs);
+
+    // 全正解者に +10点、先着 1〜3位にボーナス
+    correctList.forEach((p, idx) => {
+      let add = 10;
+      if (idx === 0) add += 5;      // 1位 +5
+      else if (idx === 1) add += 3; // 2位 +3
+      else if (idx === 2) add += 1; // 3位 +1
+
+      players[p.pid].totalScore += add;
+    });
+  }
+
+  // ランキング配列を作成
+  const rankingArray = Object.keys(players).map((pid) => ({
+    pid,
+    name: players[pid].name,
+    totalScore: players[pid].totalScore
+  }));
+
+  if (rankingArray.length === 0) {
     await FS.setDoc(
       roomRef,
       { state: { phase: "finalRanking", finalRanking: [] } },
@@ -787,13 +903,25 @@ async function admin_showFinalRanking() {
   }
 
   // スコアの降順（高得点が上位）
-  players.sort((a, b) => b.totalScore - a.totalScore);
+  rankingArray.sort((a, b) => b.totalScore - a.totalScore);
 
-  const finalRanking = players.map((p, idx) => ({
+  const finalRanking = rankingArray.map((p, idx) => ({
     rank: idx + 1,
     name: p.name,
     totalScore: p.totalScore
   }));
+
+  // players コレクション側の score も最終結果で上書きしておく
+  for (const p of rankingArray) {
+    try {
+      await FS.updateDoc(
+        FS.doc(db, "rooms", ROOM_ID, "players", p.pid),
+        { score: p.totalScore }
+      );
+    } catch (e) {
+      console.warn("update player score failed for", p.pid, e);
+    }
+  }
 
   const newState = {
     ...state,
