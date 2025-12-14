@@ -51,22 +51,40 @@
       padding: 0;
       height: 100%;
     }
+
     body {
       font-family: system-ui, sans-serif;
       padding: 32px;
       color: #111;
       /* ★背景画像（パスは環境に合わせて変更） */
       background: #000 url("picture_quiz/bg_quiz.png") center center / cover no-repeat fixed;
+      box-sizing: border-box;
     }
+
+    #screen {
+      position: relative;
+      height: 100%;
+    }
+
+    /* --- 通常の問題表示エリア --- */
     #screenQuestionText {
       font-size: 32px;
       margin-bottom: 16px;
+      background: rgba(255,255,255,0.9);
+      border-radius: 8px;
+      padding: 12px 16px;
     }
+
     #screenTimer {
       font-size: 24px;
       margin-bottom: 16px;
       color: #111;
+      background: rgba(255,255,255,0.9);
+      display: inline-block;
+      padding: 6px 12px;
+      border-radius: 6px;
     }
+
     #screenImage {
       max-width: 80vw;
       max-height: 40vh;
@@ -77,30 +95,68 @@
       object-fit: contain;
       background: rgba(255,255,255,0.8);
     }
+
     #screenChoices {
       margin-top: 8px;
     }
+
     .screenChoice {
       font-size: 24px;
       margin: 8px 0;
-      padding: 10px;
-      background: rgba(255,255,255,0.9);
-      border-radius: 6px;
+      padding: 10px 16px;
+      background: rgba(255,255,255,0.95);
+      border-radius: 12px;
+      border: 4px solid rgba(75,44,130,0.9);
+      box-shadow: 0 4px 8px rgba(0,0,0,0.3);
     }
+
+    /* --- ランキング用オーバーレイ --- */
     #screenRanking {
-      margin-top: 24px;
-      font-size: 22px;
-      background: rgba(255,255,255,0.9);
-      padding: 16px;
-      border-radius: 8px;
-      display: none;   /* ランキング時以外は script から非表示にする */
+      position: fixed;
+      inset: 0;
+      display: none;           /* ランキング時だけ script から display:flex にする */
+      align-items: center;     /* 画面中央寄せ */
+      justify-content: center;
+      pointer-events: none;    /* 誤クリック防止（必要なら外してOK） */
     }
-    #screenRanking ol {
-      padding-left: 24px;
+
+    #rankingInner {
+      max-width: 60vw;
+      min-width: 40vw;
+      padding: 24px 32px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.95);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      text-align: center;
+    }
+
+    #rankingTitle {
+      font-size: 32px;
+      margin-bottom: 16px;
+    }
+
+    #rankingList {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;       /* 基本は上から下へ */
+      justify-content: flex-end;    /* 中身を下寄せ（「下から積み上がる」感じを出す） */
+      gap: 4px;
+    }
+
+    /* ランキングの1行（茶色のバナー風） */
+    #rankingList li {
+      font-size: 24px;
+      padding: 6px 18px;
+      border-radius: 12px;
+      background: rgba(210,170,130,0.95);
+      border: 3px solid rgba(110,70,40,0.9);
+      text-align: left;
     }
   </style>
 
-  <!-- ★ defer を付ける -->
+  <!-- 共通ロジック -->
   <script src="script.js" defer></script>
 </head>
 <body>
@@ -110,10 +166,18 @@
     <div id="screenTimer" style="display:none;"></div>
     <img id="screenImage" alt="問題画像" />
     <div id="screenChoices" style="display:none;"></div>
-    <div id="screenRanking"></div>
+
+    <!-- ★ ランキングを画面中央に出すためのコンテナ -->
+    <div id="screenRanking">
+      <div id="rankingInner">
+        <div id="rankingTitle"></div>
+        <ul id="rankingList"></ul>
+      </div>
+    </div>
   </div>
 </body>
 </html>
+
 
 
 

@@ -1,5 +1,5 @@
 /*******************************************************
- * script.js（最新版・フルコード / 最終結果を answers から再計算版）
+ * script.js（最新版・フルコード）
  *  - 参加者：スマホから回答
  *  - question.html：問題表示＋10秒カウントダウン＋投票数＋正解表示＋ランキング
  *  - admin.html：出題／選択肢表示開始／投票数表示／正解発表／正解者ランキング／最終結果
@@ -335,7 +335,7 @@ async function updateScreen(st) {
     }
   }
 
-  // intro：タイマー非表示
+  // intro：タイマーも非表示
   if (phase === "intro") {
     if (timerEl) timerEl.textContent = "";
     stopCountdown();
@@ -365,7 +365,6 @@ async function updateScreen(st) {
 
     if (phase === "votes" && votes) {
       div.textContent = `${idx + 1}. ${opt}（${votes[idx + 1] || 0}票）`;
-      div.style.opacity = "0.7";
     }
 
     if (phase === "result") {
@@ -429,7 +428,8 @@ function stopCountdown() {
 }
 
 /*******************************************************
- * ⑦ question：正解者ランキング（10位→1位）
+ * ⑦ question：正解者ランキング（10位→1位を
+ *     画面下から上に積み上げて表示）
  *******************************************************/
 function startRankingAnimation(ranking) {
   const rankingEl = document.getElementById("screenRanking");
@@ -442,10 +442,29 @@ function startRankingAnimation(ranking) {
     return;
   }
 
+  // rank 昇順（1位〜）でソート
   const sorted = ranking.slice().sort((a, b) => a.rank - b.rank);
-  let idx = sorted.length - 1;  // 最下位から
 
-  rankingEl.innerHTML = "<h2>正解者ランキング（上位10名）</h2><ol id='rankingList'></ol>";
+  // 一番下の順位（例：10位）から表示開始
+  let idx = sorted.length - 1;
+
+  rankingEl.innerHTML = `
+    <h2 style="text-align:center; font-size: 36px; margin-bottom: 16px;">
+      正解者ランキング（上位10名）
+    </h2>
+    <div id="rankingContainer"
+         style="
+           margin: 0 auto;
+           width: 60%;
+           height: 60vh;
+           display: flex;
+           flex-direction: column;
+           justify-content: flex-end;
+         ">
+      <ol id="rankingList" style="list-style:none; margin:0; padding:0;"></ol>
+    </div>
+  `;
+
   const listEl = document.getElementById("rankingList");
 
   function step() {
@@ -453,14 +472,25 @@ function startRankingAnimation(ranking) {
       stopRankingAnimation();
       return;
     }
-    const p = sorted[idx--];
+    const p = sorted[idx--];               // 下位 → 上位
     const sec = ((p.timeMs || 0) / 1000).toFixed(2);
+
     const li = document.createElement("li");
     li.textContent = `${p.rank}位：${p.name}（${sec}秒）`;
-    listEl.appendChild(li);
+    li.style.margin = "6px 0";
+    li.style.fontSize = "26px";
+
+    // ★常にリストの先頭に追加 → 下から積み上がって見える
+    if (listEl.firstChild) {
+      listEl.insertBefore(li, listEl.firstChild);
+    } else {
+      listEl.appendChild(li);
+    }
   }
 
+  // 最初の1件を即表示
   step();
+  // 以降、1秒おきに次の順位を追加
   rankingInterval = setInterval(step, 1000);
 }
 
@@ -485,15 +515,31 @@ function showFinalRanking(finalRanking) {
     return;
   }
 
-  // rank 昇順で並んでいる前提。下位 → 上位になるよう逆順で表示
   const sorted = finalRanking.slice().sort((a, b) => a.rank - b.rank);
 
-  let html = "<h2>最終結果ランキング</h2><ol>";
+  let html = `
+    <h2 style="text-align:center; font-size: 40px; margin-bottom: 16px;">
+      最終結果ランキング
+    </h2>
+    <div style="
+      margin: 0 auto;
+      width: 60%;
+      height: 60vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+    ">
+      <ol style="list-style:none; margin:0; padding:0;">
+  `;
+
   for (let i = sorted.length - 1; i >= 0; i--) {
     const p = sorted[i];
-    html += `<li>${p.rank}位：${p.name}（${p.totalScore}点）</li>`;
+    html += `<li style="margin:6px 0; font-size:26px;">
+               ${p.rank}位：${p.name}（${p.totalScore}点）
+             </li>`;
   }
-  html += "</ol>";
+  html += "</ol></div>";
+
   rankingEl.innerHTML = html;
 }
 
@@ -600,8 +646,6 @@ async function admin_reveal(qid, correct) {
 
 /*******************************************************
  * ⑩ admin：正解者ランキング＋得点加算
- *   ※ players.score は今のまま更新しますが、
- *     最終結果では使わず、answers から再計算します。
  *******************************************************/
 async function admin_showRanking(qid, correct) {
   if (!FS) { alert("読み込み中です"); return; }
@@ -659,8 +703,9 @@ async function admin_showRanking(qid, correct) {
     timeMs: p.timeMs
   }));
 
-  // 得点加算（まだなら）…ここは今まで通り残しておく
+  // 得点加算（まだなら）
   if (!alreadyScored) {
+    // 参加フラグ
     for (const pid in answers) {
       const pInfo = players[pid];
       if (!pInfo) continue;
@@ -673,14 +718,15 @@ async function admin_showRanking(qid, correct) {
       );
     }
 
+    // 正解者に得点
     for (let i = 0; i < tmpList.length; i++) {
       const p = tmpList[i];
       const pInfo = players[p.pid] || { score: 0 };
-      let add = 10;
+      let add = 10;               // 正解者全員に10点
 
-      if (i === 0) add += 5;
-      else if (i === 1) add += 3;
-      else if (i === 2) add += 1;
+      if (i === 0) add += 5;      // 1位 +5
+      else if (i === 1) add += 3; // 2位 +3
+      else if (i === 2) add += 1; // 3位 +1
 
       const newScore = (pInfo.score || 0) + add;
       players[p.pid].score = newScore;
@@ -707,103 +753,44 @@ async function admin_showRanking(qid, correct) {
 }
 
 /*******************************************************
- * ⑪ admin：最終結果ランキング（answers から再計算）
+ * ⑪ admin：最終結果ランキング
  *******************************************************/
 async function admin_showFinalRanking() {
   if (!FS) { alert("読み込み中です"); return; }
 
-  // 1) プレイヤー一覧
   const playersSnap = await FS.getDocs(
     FS.collection(db, "rooms", ROOM_ID, "players")
   );
-  const players = {};
+
+  const list = [];
   playersSnap.forEach(pdoc => {
     const pdata = pdoc.data();
-    players[pdoc.id] = {
+    const participated = pdata.participated || 0;
+    if (participated <= 0) return; // 一度も参加していない人は除外
+
+    list.push({
       name: pdata.name || "名無し",
-      totalScore: 0
-    };
+      totalScore: pdata.score || 0
+    });
   });
 
-  const playerIds = Object.keys(players);
-  if (playerIds.length === 0) {
+  if (list.length === 0) {
     await FS.setDoc(
       FS.doc(db, "rooms", ROOM_ID),
-      { state: { phase: "finalRanking", finalRanking: [] } },
+      {
+        state: {
+          phase: "finalRanking",
+          finalRanking: []
+        }
+      },
       { merge: true }
     );
     return;
   }
 
-  // 2) 問題一覧（questions コレクションから）
-  const qsSnap = await FS.getDocs(
-    FS.collection(db, "rooms", ROOM_ID, "questions")
-  );
-  const questionList = [];
-  qsSnap.forEach(qdoc => {
-    const data = qdoc.data();
-    if (typeof data.correct === "number") {
-      questionList.push({ id: qdoc.id, correct: data.correct });
-    }
-  });
+  list.sort((a, b) => b.totalScore - a.totalScore);
 
-  // 3) 各問題ごとに answers を読み、得点を加算
-  for (const q of questionList) {
-    const answersSnap = await FS.getDoc(
-      FS.doc(db, "rooms", ROOM_ID, "answers", q.id)
-    );
-    const data = answersSnap.exists() ? answersSnap.data() : {};
-
-    const withTime = [];
-    const noTime  = [];
-
-    for (const pid in data) {
-      let entry = data[pid];
-      if (entry == null) continue;
-
-      let opt, tMs = null;
-
-      if (typeof entry === "number") {
-        opt = entry;
-      } else if (typeof entry === "object") {
-        opt = entry.option;
-        tMs = toMillis(entry.time);
-      } else {
-        continue;
-      }
-
-      if (opt !== q.correct) continue;
-      if (!players[pid]) continue;
-
-      if (tMs != null) withTime.push({ pid, tMs });
-      else noTime.push({ pid });
-    }
-
-    // 反応時間が取れている人だけ順番付け（早押しボーナス用）
-    withTime.sort((a, b) => a.tMs - b.tMs);
-
-    const base = 10;
-
-    // 早押しボーナス付き
-    withTime.forEach((p, index) => {
-      let bonus = 0;
-      if (index === 0) bonus = 5;
-      else if (index === 1) bonus = 3;
-      else if (index === 2) bonus = 1;
-      players[p.pid].totalScore += base + bonus;
-    });
-
-    // 時刻が無い正解者はボーナスなしで10点だけ
-    noTime.forEach(p => {
-      players[p.pid].totalScore += base;
-    });
-  }
-
-  // 4) ランキング作成（合計点が同じなら現状は同順位扱いにしないでそのまま並び順）
-  const arr = Object.values(players);
-  arr.sort((a, b) => b.totalScore - a.totalScore);
-
-  const finalRanking = arr.map((p, idx) => ({
+  const finalRanking = list.map((p, idx) => ({
     rank: idx + 1,
     name: p.name,
     totalScore: p.totalScore
@@ -811,7 +798,12 @@ async function admin_showFinalRanking() {
 
   await FS.setDoc(
     FS.doc(db, "rooms", ROOM_ID),
-    { state: { phase: "finalRanking", finalRanking } },
+    {
+      state: {
+        phase: "finalRanking",
+        finalRanking
+      }
+    },
     { merge: true }
   );
 }
