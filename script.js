@@ -1,5 +1,5 @@
 /*******************************************************
- * script.js（最新版・フルコード）
+ * script.js（修正版フルコード：最終結果ランキング修正版）
  *  - 参加者：スマホから回答
  *  - question.html：問題表示＋10秒カウントダウン＋投票数＋正解表示＋ランキング
  *  - admin.html：出題／選択肢表示開始／投票数表示／正解発表／正解者ランキング／最終結果
@@ -79,7 +79,7 @@ async function joinGame() {
     {
       name,
       score: 0,
-      participated: 0,
+      participated: 0,   // 参加回数（今後も使えるよう残しておく）
       joinedAt: Date.now()
     },
     { merge: true }
@@ -502,49 +502,7 @@ function stopRankingAnimation() {
 }
 
 /*******************************************************
- * ⑧ question：最終結果ランキング（下位→上位）
- *******************************************************/
-function showFinalRanking(finalRanking) {
-  const rankingEl = document.getElementById("screenRanking");
-  if (!rankingEl) return;
-
-  stopRankingAnimation();
-
-  if (!Array.isArray(finalRanking) || finalRanking.length === 0) {
-    rankingEl.innerHTML = "<h2>最終結果：スコアデータがありません</h2>";
-    return;
-  }
-
-  const sorted = finalRanking.slice().sort((a, b) => a.rank - b.rank);
-
-  let html = `
-    <h2 style="text-align:center; font-size: 40px; margin-bottom: 16px;">
-      最終結果ランキング
-    </h2>
-    <div style="
-      margin: 0 auto;
-      width: 60%;
-      height: 60vh;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
-    ">
-      <ol style="list-style:none; margin:0; padding:0;">
-  `;
-
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const p = sorted[i];
-    html += `<li style="margin:6px 0; font-size:26px;">
-               ${p.rank}位：${p.name}（${p.totalScore}点）
-             </li>`;
-  }
-  html += "</ol></div>";
-
-  rankingEl.innerHTML = html;
-}
-
-/*******************************************************
- * ⑨ admin：出題系（intro / question / votes / result）
+ * ⑧ admin：出題系（intro / question / votes / result）
  *******************************************************/
 async function admin_showIntro(qid) {
   if (!FS) { alert("読み込み中です"); return; }
@@ -645,7 +603,7 @@ async function admin_reveal(qid, correct) {
 }
 
 /*******************************************************
- * ⑩ admin：正解者ランキング＋得点加算
+ * ⑨ admin：正解者ランキング＋得点加算
  *******************************************************/
 async function admin_showRanking(qid, correct) {
   if (!FS) { alert("読み込み中です"); return; }
@@ -753,7 +711,7 @@ async function admin_showRanking(qid, correct) {
 }
 
 /*******************************************************
- * ⑪ admin：最終結果ランキング
+ * ⑩ admin：最終結果ランキング（全参加者をスコア順）
  *******************************************************/
 async function admin_showFinalRanking() {
   if (!FS) { alert("読み込み中です"); return; }
@@ -765,15 +723,16 @@ async function admin_showFinalRanking() {
   const list = [];
   playersSnap.forEach(pdoc => {
     const pdata = pdoc.data();
-    const participated = pdata.participated || 0;
-    if (participated <= 0) return; // 一度も参加していない人は除外
+    // 参加回数に関係なく、全員を対象にする
+    const score = typeof pdata.score === "number" ? pdata.score : 0;
 
     list.push({
       name: pdata.name || "名無し",
-      totalScore: pdata.score || 0
+      totalScore: score
     });
   });
 
+  // プレイヤーが1人もいない場合だけ空データ
   if (list.length === 0) {
     await FS.setDoc(
       FS.doc(db, "rooms", ROOM_ID),
@@ -788,6 +747,7 @@ async function admin_showFinalRanking() {
     return;
   }
 
+  // 総得点の降順で並べる（1位が一番スコアが高い）
   list.sort((a, b) => b.totalScore - a.totalScore);
 
   const finalRanking = list.map((p, idx) => ({
@@ -809,7 +769,7 @@ async function admin_showFinalRanking() {
 }
 
 /*******************************************************
- * ⑫ admin：待機画面へ戻す
+ * ⑪ admin：待機画面へ戻す
  *******************************************************/
 async function admin_resetScreen() {
   if (!FS) { alert("読み込み中です"); return; }
@@ -832,7 +792,7 @@ async function admin_resetScreen() {
 }
 
 /*******************************************************
- * ⑬ Firebase 初期化受け取り
+ * ⑫ Firebase 初期化受け取り
  *******************************************************/
 window.addEventListener("load", () => {
   db = window.firebaseDB;
@@ -853,6 +813,7 @@ window.addEventListener("load", () => {
     listenState();
   }
 });
+
 
 
 
