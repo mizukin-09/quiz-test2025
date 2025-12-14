@@ -1,5 +1,5 @@
 /*******************************************************
- * script.js（フルコード：2025-12-14 最終結果修正版）
+ * script.js（フルコード：最終結果ランキング表示修正版）
  *  - index.html   : 参加者用（スマホ）
  *  - question.html: 画面共有用
  *  - admin.html   : 司会・進行用
@@ -279,6 +279,8 @@ async function updateScreen(state) {
   const timerEl   = document.getElementById("screenTimer");
   const imgEl     = document.getElementById("screenImage");
   const rankingEl = document.getElementById("screenRanking");
+  const titleEl   = document.getElementById("rankingTitle");
+  const listEl    = document.getElementById("rankingList");
 
   // 待機画面：背景だけ
   if (phase === "waiting") {
@@ -286,7 +288,11 @@ async function updateScreen(state) {
     if (list)    { list.innerHTML = ""; list.style.display = "none"; }
     if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
     if (imgEl)   { imgEl.style.display = "none"; }
-    if (rankingEl) { rankingEl.innerHTML = ""; rankingEl.style.display = "none"; }
+    if (rankingEl) {
+      rankingEl.style.display = "none";
+      if (titleEl) titleEl.textContent = "";
+      if (listEl)  listEl.innerHTML = "";
+    }
     stopCountdown();
     stopRankingAnimation();
     return;
@@ -295,8 +301,9 @@ async function updateScreen(state) {
   // ランキング以外ではランキング枠を消す
   if (rankingEl && phase !== "ranking" && phase !== "finalRanking") {
     stopRankingAnimation();
-    rankingEl.innerHTML = "";
     rankingEl.style.display = "none";
+    if (titleEl) titleEl.textContent = "";
+    if (listEl)  listEl.innerHTML = "";
   }
 
   // 最終結果
@@ -305,7 +312,7 @@ async function updateScreen(state) {
     if (list)    { list.innerHTML = ""; list.style.display = "none"; }
     if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
     if (imgEl)   { imgEl.style.display = "none"; }
-    if (rankingEl) rankingEl.style.display = "block";
+    if (rankingEl) rankingEl.style.display = "flex";
     showFinalRanking(finalRanking || []);
     return;
   }
@@ -316,7 +323,7 @@ async function updateScreen(state) {
     if (list)    { list.innerHTML = ""; list.style.display = "none"; }
     if (timerEl) { timerEl.textContent = ""; timerEl.style.display = "none"; }
     if (imgEl)   { imgEl.style.display = "none"; }
-    if (rankingEl) rankingEl.style.display = "block";
+    if (rankingEl) rankingEl.style.display = "flex";
     startRankingAnimation(ranking || []);
     return;
   }
@@ -448,13 +455,17 @@ function stopCountdown() {
  *     画面下から上へ積み上げる表示
  *******************************************************/
 function startRankingAnimation(ranking) {
-  const rankingEl = document.getElementById("screenRanking");
-  if (!rankingEl) return;
+  const overlay = document.getElementById("screenRanking");
+  const titleEl = document.getElementById("rankingTitle");
+  const listEl  = document.getElementById("rankingList");
+  if (!overlay || !titleEl || !listEl) return;
 
   stopRankingAnimation();
 
   if (!Array.isArray(ranking) || ranking.length === 0) {
-    rankingEl.innerHTML = "<h2>正解者は0人でした…</h2>";
+    overlay.style.display = "flex";
+    titleEl.textContent = "正解者は0人でした…";
+    listEl.innerHTML = "";
     return;
   }
 
@@ -464,23 +475,9 @@ function startRankingAnimation(ranking) {
   // 一番下の順位から表示
   let idx = sorted.length - 1;
 
-  rankingEl.innerHTML = `
-    <h2 style="text-align:center; font-size: 36px; margin-bottom: 16px;">
-      正解者ランキング（上位10名）
-    </h2>
-    <div style="
-      margin: 0 auto;
-      width: 60%;
-      height: 60vh;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
-    ">
-      <ol id="rankingList" style="list-style:none; margin:0; padding:0;"></ol>
-    </div>
-  `;
-
-  const listEl = document.getElementById("rankingList");
+  overlay.style.display = "flex";
+  titleEl.textContent = "正解者ランキング（上位10名）";
+  listEl.innerHTML = "";
 
   function step() {
     if (idx < 0) {
@@ -492,15 +489,10 @@ function startRankingAnimation(ranking) {
 
     const li  = document.createElement("li");
     li.textContent = `${p.rank}位：${p.name}（${sec}秒）`;
-    li.style.margin   = "6px 0";
-    li.style.fontSize = "26px";
 
-    // 先頭に追加 → 下から積み上がって見える
-    if (listEl.firstChild) {
-      listEl.insertBefore(li, listEl.firstChild);
-    } else {
-      listEl.appendChild(li);
-    }
+    // flex-direction: column + justify-content:flex-end なので
+    // 下から積み上がるように appendChild でOK
+    listEl.appendChild(li);
   }
 
   step();                    // 最初の1件
@@ -518,49 +510,32 @@ function stopRankingAnimation() {
  * ⑧ question：最終結果表示（静的に全員分を表示）
  *******************************************************/
 function showFinalRanking(finalRanking) {
-  const rankingEl = document.getElementById("screenRanking");
-  if (!rankingEl) return;
+  const overlay = document.getElementById("screenRanking");
+  const titleEl = document.getElementById("rankingTitle");
+  const listEl  = document.getElementById("rankingList");
+  if (!overlay || !titleEl || !listEl) return;
 
   stopRankingAnimation();
 
+  overlay.style.display = "flex";
+  listEl.innerHTML = "";
+
   if (!Array.isArray(finalRanking) || finalRanking.length === 0) {
-    rankingEl.innerHTML = "<h2>最終結果：スコアデータがありません</h2>";
+    titleEl.textContent = "最終結果：スコアデータがありません";
     return;
   }
+
+  titleEl.textContent = "最終結果ランキング";
 
   // rank が 1位〜 の昇順になっている前提で、下位から表示
   const sorted = finalRanking.slice().sort((a, b) => a.rank - b.rank);
 
-  let html = `
-    <h2 style="text-align:center; font-size: 36px; margin-bottom: 16px;">
-      最終結果ランキング
-    </h2>
-    <div style="
-      margin: 0 auto;
-      width: 60%;
-      height: 60vh;
-      display: flex;
-      flex-direction: column;
-      justify-content: flex-end;
-    ">
-      <ol style="list-style:none; margin:0; padding:0;">
-  `;
-
   for (let i = sorted.length - 1; i >= 0; i--) {
     const p = sorted[i];
-    html += `
-      <li style="margin:6px 0; font-size:26px;">
-        ${p.rank}位：${p.name}（${p.totalScore}点）
-      </li>
-    `;
+    const li = document.createElement("li");
+    li.textContent = `${p.rank}位：${p.name}（${p.totalScore}点）`;
+    listEl.appendChild(li);
   }
-
-  html += `
-      </ol>
-    </div>
-  `;
-
-  rankingEl.innerHTML = html;
 }
 
 /*******************************************************
@@ -876,6 +851,7 @@ window.addEventListener("load", () => {
     }
   }
 });
+
 
 
 
