@@ -1,881 +1,879 @@
-/*******************************************************
- * script.js（B方式：Firestore自動更新なし）
- * - index.html    : 参加者(スマホ) 解答のみ（deadlineで自動締切）
- * - question.html : 画面共有 表示のみ（Firestoreは書き換えない）
- * - admin.html    : 司会 操作（intro→question→votes→result→ranking→final）
- *
- * 修正点：
- * 1) admin_resetScreen() を追加（待機に戻るボタンが動く）
- * 2) admin_showFinalRanking() を追加（admin.html と一致）
- * 3) 「回答開始した瞬間に時間切れ」対策：
- *    - 端末時計ズレ/反映遅延があっても、受信時刻基準で10秒に自動補正
- *******************************************************/
+/* ======================================================
+   script.js（完全版）
+   - admin / index / question 共通
+   - フェーズ: idle → intro(出題) → question(回答) → votes → result → ranking → final
+   - 回答締切は「index側で時間判定」（自動で投票不可）
+   - スコア: 正解+10 / 早押し上位3名に +5,+3,+1
+   - ランキング表示は「下位→上位を下から積み上げ」
+====================================================== */
 
-const ROOM_ID = "roomA";
-const DEFAULT_SECONDS = 10;
+(() => {
+  "use strict";
 
-// Firebase（各HTMLの module で window に注入）
-let db = null;
-let FS = null;
+  /* ====== 設定 ====== */
+  const ROOM_ID = "roomA";
+  const ANSWER_LIMIT_MS = 10_000;     // 回答時間 10秒
+  const RANK_ANIM_INTERVAL = 900;     // ランキング積み上げ間隔(ms)
 
-// プレイヤー情報（indexのみ使用）
-let playerId = localStorage.getItem("playerId");
-let playerName = localStorage.getItem("playerName");
+  /* ====== Firebase 注入（HTML側で window に入ってる想定） ====== */
+  let db = null;
+  let FS = null;
 
-// 画面判定
-const isIndex = !!document.getElementById("joinBtn");
-const isQuestion = !!document.getElementById("screenQuestionText");
+  /* ====== ローカル保持 ====== */
+  let playerId = localStorage.getItem("playerId") || null;
+  let playerName = localStorage.getItem("playerName") || null;
 
-// index DOM
-const nameInput = document.getElementById("nameInput");
-const joinBtn = document.getElementById("joinBtn");
-const waitingArea = document.getElementById("waitingArea");
-const choicesDiv = document.getElementById("choices");
+  // Index側で state を都度 getDoc しないため、最新stateを保持
+  let currentState = null;
 
-// question DOM
-const qQuestionText = document.getElementById("screenQuestionText");
-const qTimer = document.getElementById("screenTimer");
-const qImage = document.getElementById("screenImage");
-const qChoices = document.getElementById("screenChoices");
-const qRankingWrap = document.getElementById("screenRanking");
-const qRankingTitle = document.getElementById("rankingTitle");
-const qRankingList = document.getElementById("rankingList");
+  // Snapshot解除
+  let unsubRoom = null;
 
-// --------------------- 共通ユーティリティ ---------------------
-function makeId(len = 10) {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  let s = "";
-  for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return s;
-}
+  // Question側 タイマー/ランキング用
+  let questionTimer = null;
+  let rankTimer = null;
 
-// Firestore Timestamp / number を ms に
-function toMillis(t) {
-  if (t == null) return null;
-  if (typeof t === "number") return t;
-  if (typeof t.toMillis === "function") return t.toMillis();
-  if (typeof t.seconds === "number") return t.seconds * 1000 + (t.nanoseconds || 0) / 1e6;
-  return null;
-}
-
-function roomRef() {
-  return FS.doc(db, "rooms", ROOM_ID);
-}
-function questionRef(qid) {
-  return FS.doc(db, "rooms", ROOM_ID, "questions", String(qid));
-}
-function answersRef(qid) {
-  return FS.doc(db, "rooms", ROOM_ID, "answers", String(qid));
-}
-function playerRef(pid) {
-  return FS.doc(db, "rooms", ROOM_ID, "players", pid);
-}
-
-async function ensureRoomDoc() {
-  const snap = await FS.getDoc(roomRef());
-  if (!snap.exists()) {
-    await FS.setDoc(roomRef(), { state: { phase: "waiting" } }, { merge: true });
+  /* ======================================================
+     Util
+  ====================================================== */
+  function makeId(len = 12) {
+    const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let s = "";
+    for (let i = 0; i < len; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
   }
-}
 
-// --------------------- state監視 ---------------------
-let unState = null;
-let latestState = null;
+  function nowMs() {
+    return Date.now();
+  }
 
-// index用：表示中の設問
-let indexShownQid = null;
-let indexDisableTimer = null;
-let indexAnsweredForQid = null;
-let indexQuestionReceivedAtMs = null;
+  function fmtSec(ms) {
+    const v = Math.max(0, ms) / 1000;
+    return v.toFixed(2);
+  }
 
-// question用：表示中の設問
-let questionShownQid = null;
-let questionReceivedAtMs = null;
+  function clearTimer(t) {
+    if (t) clearInterval(t);
+  }
+  function clearTimeoutSafe(t) {
+    if (t) clearTimeout(t);
+  }
 
-function listenState() {
-  if (!FS) return;
-  if (unState) unState();
+  function isIndexPage() {
+    return !!document.getElementById("joinBtn");
+  }
+  function isQuestionPage() {
+    return !!document.getElementById("screen");
+  }
 
-  unState = FS.onSnapshot(roomRef(), async (snap) => {
-    if (!snap.exists()) {
-      latestState = { phase: "waiting" };
-      if (isQuestion) renderQuestionScreen(latestState);
-      if (isIndex) renderIndexScreen(latestState);
-      return;
-    }
+  /* ======================================================
+     Firestore Refs
+  ====================================================== */
+  const roomRef = () => FS.doc(db, "rooms", ROOM_ID);
+  const questionRef = (qid) => FS.doc(db, "rooms", ROOM_ID, "questions", String(qid));
+  const answersRef = (qid) => FS.doc(db, "rooms", ROOM_ID, "answers", String(qid));
+  const playersCol = () => FS.collection(db, "rooms", ROOM_ID, "players");
+  const playerRef = (pid) => FS.doc(db, "rooms", ROOM_ID, "players", pid);
 
+  async function readRoomState() {
+    const snap = await FS.getDoc(roomRef());
+    if (!snap.exists()) return null;
     const data = snap.data() || {};
-    latestState = data.state || { phase: "waiting" };
-
-    if (isQuestion) renderQuestionScreen(latestState);
-    if (isIndex) renderIndexScreen(latestState);
-  });
-}
-
-// --------------------- deadline補正（重要） ---------------------
-// adminのdeadlineMsが端末の時計ズレで「過去」扱いになると即タイムアップになるため、
-// 「この端末が質問フェーズを受信した時刻」基準で seconds 分は必ず猶予を確保する。
-function getSecondsFromState(state) {
-  const s = state?.seconds;
-  if (typeof s === "number" && s >= 1 && s <= 120) return s;
-  return DEFAULT_SECONDS;
-}
-
-function calcClientDeadlineMs(state, receivedAtMs) {
-  const seconds = getSecondsFromState(state);
-
-  // まずは state.deadlineMs を使う
-  let deadlineMs = (typeof state?.deadlineMs === "number") ? state.deadlineMs : null;
-
-  // startAt（server）と startAtMs（adminローカル）から補正（admin時計がズレてても少しマシにする）
-  const startAtServer = toMillis(state?.startAt);
-  const startAtLocal = (typeof state?.startAtMs === "number") ? state.startAtMs : null;
-  if (deadlineMs != null && startAtServer != null && startAtLocal != null) {
-    const delta = startAtServer - startAtLocal;
-    deadlineMs = deadlineMs + delta;
+    return data.state || null;
   }
 
-  // ★最重要：受信時刻より前なら「受信時刻+seconds」に補正（即タイムアップ対策）
-  if (receivedAtMs != null) {
-    const minDeadline = receivedAtMs + seconds * 1000;
-    if (deadlineMs == null || deadlineMs < minDeadline) {
-      deadlineMs = minDeadline;
-    }
+  /* ======================================================
+     Index UI
+  ====================================================== */
+  function idxEls() {
+    return {
+      joinArea: document.getElementById("joinArea"),
+      nameInput: document.getElementById("nameInput"),
+      joinBtn: document.getElementById("joinBtn"),
+      waitingArea: document.getElementById("waitingArea"),
+      choices: document.getElementById("choices"),
+    };
   }
 
-  return deadlineMs;
-}
-
-// --------------------- index: 参加 ---------------------
-async function joinGame() {
-  if (!FS) {
-    alert("Firestore準備中です。少し待って再度お試しください");
-    return;
+  function idxShowWaiting(msg) {
+    const el = idxEls();
+    if (!el.waitingArea) return;
+    el.waitingArea.style.display = "block";
+    el.waitingArea.textContent = msg || "司会の合図があるまでお待ちください…";
   }
 
-  const name = (nameInput?.value || "").trim();
-  if (!name) return alert("ニックネームを入力してください");
-
-  if (!playerId) {
-    playerId = makeId();
-    localStorage.setItem("playerId", playerId);
+  function idxHideChoices() {
+    const el = idxEls();
+    if (!el.choices) return;
+    el.choices.innerHTML = "";
   }
-  playerName = name;
-  localStorage.setItem("playerName", name);
 
-  // ★ score を毎回0で上書きしない（重要）
-  const pSnap = await FS.getDoc(playerRef(playerId));
-  if (!pSnap.exists()) {
-    await FS.setDoc(playerRef(playerId), {
-      name,
-      score: 0,
-      joinedAtMs: Date.now()
+  function idxRenderChoices(options, enabled) {
+    const el = idxEls();
+    if (!el.choices) return;
+
+    el.choices.innerHTML = "";
+
+    (options || []).forEach((opt, idx) => {
+      const btn = document.createElement("button");
+      btn.className = "choiceBtn";
+      btn.textContent = `${idx + 1}. ${opt}`;
+      btn.style.display = "block";
+      btn.style.width = "100%";
+      btn.style.margin = "10px 0";
+      btn.style.padding = "14px 12px";
+      btn.style.fontSize = "18px";
+      btn.style.borderRadius = "10px";
+      btn.style.border = "2px solid #333";
+      btn.style.background = "#fff";
+      btn.style.cursor = "pointer";
+
+      btn.disabled = !enabled;
+
+      btn.onclick = () => answer(idx + 1);
+
+      el.choices.appendChild(btn);
     });
-  } else {
-    await FS.updateDoc(playerRef(playerId), { name });
   }
 
-  // UI切替
-  document.getElementById("joinArea")?.setAttribute("style", "display:none;");
-  if (nameInput) nameInput.style.display = "none";
-  if (joinBtn) joinBtn.style.display = "none";
-  if (waitingArea) waitingArea.style.display = "block";
-
-  // 監視開始
-  listenState();
-}
-
-// index: stateに応じた表示
-async function renderIndexScreen(state) {
-  const phase = state?.phase || "waiting";
-
-  // 待機系
-  if (phase === "waiting" || phase === "idle" || phase === "intro" || !phase) {
-    if (waitingArea) {
-      waitingArea.style.display = "block";
-      waitingArea.textContent = "準備ができるまでお待ちください";
-    }
-    if (choicesDiv) choicesDiv.innerHTML = "";
-    indexShownQid = null;
-    indexAnsweredForQid = null;
-    indexQuestionReceivedAtMs = null;
-    clearIndexDisableTimer();
-    return;
-  }
-
-  // 出題中（解答受付中）
-  if (phase === "question") {
-    if (waitingArea) waitingArea.style.display = "none";
-
-    const qid = state.currentQuestion;
-    const now = Date.now();
-
-    // 問題が切り替わった瞬間を「受信時刻」として記録（補正用）
-    if (qid != null && qid !== indexShownQid) {
-      indexShownQid = qid;
-      indexAnsweredForQid = null;
-      indexQuestionReceivedAtMs = now;
-      await renderIndexChoices(qid);
-    }
-
-    const deadlineMs = calcClientDeadlineMs(state, indexQuestionReceivedAtMs ?? now);
-
-    // deadlineで自動締切（手動不要）
-    scheduleIndexDisable(deadlineMs);
-    if (Date.now() >= deadlineMs) disableIndexChoices(true);
-    else disableIndexChoices(false);
-
-    return;
-  }
-
-  // それ以外のフェーズでは解答不可
-  disableIndexChoices(true);
-}
-
-// index: 選択肢描画
-async function renderIndexChoices(qid) {
-  if (!FS || !choicesDiv) return;
-
-  const qSnap = await FS.getDoc(questionRef(qid));
-  if (!qSnap.exists()) {
-    choicesDiv.innerHTML = "<p>問題データがありません</p>";
-    return;
-  }
-
-  const q = qSnap.data();
-  const options = Array.isArray(q.options) ? q.options : [];
-
-  choicesDiv.innerHTML = "";
-  options.forEach((opt, idx) => {
-    const btn = document.createElement("button");
-    btn.className = "choiceBtn";
-    btn.textContent = `${idx + 1}. ${opt}`;
-    btn.onclick = () => answer(idx + 1);
-
-    // スマホ押しやすい
-    btn.style.display = "block";
-    btn.style.width = "100%";
-    btn.style.fontSize = "18px";
-    btn.style.padding = "12px 14px";
-    btn.style.margin = "10px 0";
-    btn.style.borderRadius = "10px";
-    btn.style.border = "2px solid rgba(0,0,0,0.25)";
-    btn.style.background = "rgba(255,255,255,0.92)";
-    btn.style.color = "#111";
-
-    choicesDiv.appendChild(btn);
-  });
-
-  disableIndexChoices(false);
-}
-
-// index: 回答
-async function answer(optIdx) {
-  if (!FS) return;
-  if (!latestState || latestState.phase !== "question") {
-    alert("回答時間が終了しています");
-    disableIndexChoices(true);
-    return;
-  }
-
-  const qid = latestState.currentQuestion;
-  const now = Date.now();
-  const deadlineMs = calcClientDeadlineMs(latestState, indexQuestionReceivedAtMs ?? now);
-
-  // deadline判定（二重ガード）
-  if (Date.now() > deadlineMs) {
-    alert("回答時間が終了しています");
-    disableIndexChoices(true);
-    return;
-  }
-
-  // 同一問題で二度押し防止（UI上）
-  if (indexAnsweredForQid === qid) return;
-  indexAnsweredForQid = qid;
-
-  // UI：選んだもの青枠、他は薄く
-  document.querySelectorAll(".choiceBtn").forEach((btn, idx) => {
-    if (idx + 1 === optIdx) {
-      btn.style.border = "4px solid #0066ff";
-      btn.style.background = "#eef4ff";
-      btn.style.opacity = "1";
-    } else {
-      btn.style.opacity = "0.25";
-    }
-    btn.disabled = true;
-  });
-
-  await FS.setDoc(
-    answersRef(qid),
-    {
-      [playerId]: {
-        option: optIdx,
-        answeredAt: FS.serverTimestamp(),
-        answeredAtMs: Date.now()
+  function idxHighlightChoice(optIdx) {
+    const btns = document.querySelectorAll(".choiceBtn");
+    btns.forEach((b, i) => {
+      const n = i + 1;
+      if (n === optIdx) {
+        b.style.border = "4px solid #1e5bff";
+        b.style.background = "#eaf1ff";
+        b.style.opacity = "1";
+      } else {
+        b.style.opacity = "0.35";
       }
-    },
-    { merge: true }
-  );
-}
-
-function disableIndexChoices(disabled) {
-  document.querySelectorAll(".choiceBtn").forEach((b) => (b.disabled = !!disabled));
-}
-
-function clearIndexDisableTimer() {
-  if (indexDisableTimer) {
-    clearTimeout(indexDisableTimer);
-    indexDisableTimer = null;
-  }
-}
-
-function scheduleIndexDisable(deadlineMs) {
-  clearIndexDisableTimer();
-  const ms = Math.max(0, deadlineMs - Date.now());
-  indexDisableTimer = setTimeout(() => {
-    disableIndexChoices(true);
-  }, ms);
-}
-
-// --------------------- question: 表示専用（Firestore書き換え無し） ---------------------
-let questionCountdownInterval = null;
-let questionCountdownForQid = null;
-let rankingInterval = null;
-
-function qHideAll() {
-  if (qQuestionText) qQuestionText.style.display = "none";
-  if (qTimer) qTimer.style.display = "none";
-  if (qImage) qImage.style.display = "none";
-  if (qChoices) qChoices.style.display = "none";
-  if (qRankingWrap) qRankingWrap.style.display = "none";
-  if (qRankingTitle) qRankingTitle.textContent = "";
-  if (qRankingList) qRankingList.innerHTML = "";
-  stopQuestionCountdown();
-  stopRankingAnimation();
-}
-
-async function renderQuestionScreen(state) {
-  if (!FS) return;
-
-  const phase = state?.phase || "waiting";
-  const qid = state?.currentQuestion;
-
-  // 待機：背景のみ
-  if (phase === "waiting" || phase === "idle" || !phase) {
-    qHideAll();
-    questionShownQid = null;
-    questionReceivedAtMs = null;
-    return;
+    });
   }
 
-  // ランキング／最終結果：中央パネルのみ
-  if (phase === "ranking") {
-    qHideAll();
-    qRankingWrap.style.display = "flex";
-    startStackRanking(state.ranking || [], "正解者ランキング（上位10名）", "time");
-    return;
+  function idxDisableAllChoices() {
+    document.querySelectorAll(".choiceBtn").forEach(b => (b.disabled = true));
   }
 
-  if (phase === "final") {
-    qHideAll();
-    qRankingWrap.style.display = "flex";
-    startStackRanking(state.finalRanking || [], "最終結果ランキング", "score");
-    return;
+  /* ======================================================
+     Question UI
+  ====================================================== */
+  function qEls() {
+    return {
+      screenQuestionText: document.getElementById("screenQuestionText"),
+      screenTimer: document.getElementById("screenTimer"),
+      screenImage: document.getElementById("screenImage"),
+      screenChoices: document.getElementById("screenChoices"),
+
+      screenRanking: document.getElementById("screenRanking"),
+      rankingTitle: document.getElementById("rankingTitle"),
+      rankingList: document.getElementById("rankingList"),
+    };
   }
 
-  // ここから intro / question / votes / result
-  if (qid == null) {
-    qHideAll();
-    return;
-  }
+  function qHideAll() {
+    const el = qEls();
 
-  const now = Date.now();
-  if (qid !== questionShownQid) {
-    questionShownQid = qid;
-    questionReceivedAtMs = now;
-  }
+    // timers
+    clearTimer(questionTimer);
+    questionTimer = null;
+    clearTimeoutSafe(rankTimer);
+    rankTimer = null;
 
-  const qSnap = await FS.getDoc(questionRef(qid));
-  if (!qSnap.exists()) {
-    qHideAll();
-    if (qQuestionText) {
-      qQuestionText.style.display = "block";
-      qQuestionText.textContent = "問題データがありません";
+    // main
+    if (el.screenQuestionText) {
+      el.screenQuestionText.style.display = "none";
+      el.screenQuestionText.textContent = "";
     }
-    return;
+    if (el.screenTimer) {
+      el.screenTimer.style.display = "none";
+      el.screenTimer.textContent = "";
+    }
+    if (el.screenImage) {
+      el.screenImage.style.display = "none";
+      el.screenImage.src = "";
+    }
+    if (el.screenChoices) {
+      el.screenChoices.style.display = "none";
+      el.screenChoices.innerHTML = "";
+    }
+
+    // ranking overlay
+    if (el.screenRanking) el.screenRanking.style.display = "none";
+    if (el.rankingTitle) el.rankingTitle.textContent = "";
+    if (el.rankingList) el.rankingList.innerHTML = "";
   }
 
-  const q = qSnap.data();
-  const options = Array.isArray(q.options) ? q.options : [];
-  const correct = state.correct;
-
-  // 問題文
-  if (qQuestionText) {
-    qQuestionText.style.display = "block";
-    qQuestionText.textContent = q.text || "";
+  async function loadQuestion(qid) {
+    const snap = await FS.getDoc(questionRef(qid));
+    return snap.exists() ? snap.data() : null;
   }
 
-  // 画像
-  if (qImage) {
-    if (q.imageUrl) {
-      qImage.src = q.imageUrl;
-      qImage.style.display = "block";
-    } else {
-      qImage.style.display = "none";
+  function qRenderIntro(q) {
+    // 1枚目イメージ：問題文（＋画像）が中央、選択肢・タイマー無し
+    const el = qEls();
+    qHideAll();
+
+    if (el.screenQuestionText) {
+      el.screenQuestionText.style.display = "block";
+      el.screenQuestionText.textContent = q?.text || "";
+    }
+
+    if (q?.imageUrl && el.screenImage) {
+      el.screenImage.style.display = "block";
+      el.screenImage.src = q.imageUrl;
     }
   }
 
-  // intro
-  if (phase === "intro") {
-    if (qTimer) qTimer.style.display = "none";
-    if (qChoices) qChoices.style.display = "none";
-    stopQuestionCountdown();
-    return;
-  }
+  function qRenderQuestion(q, st) {
+    // 2枚目イメージ：問題文＋（画像）＋選択肢＋タイマー
+    const el = qEls();
+    qHideAll();
 
-  // question（表示だけ）
-  if (phase === "question") {
-    if (qChoices) qChoices.style.display = "block";
-    if (qTimer) qTimer.style.display = "block";
+    if (el.screenQuestionText) {
+      el.screenQuestionText.style.display = "block";
+      el.screenQuestionText.textContent = q?.text || "";
+    }
 
-    if (qChoices) {
-      qChoices.innerHTML = "";
-      options.forEach((opt, idx) => {
+    if (q?.imageUrl && el.screenImage) {
+      el.screenImage.style.display = "block";
+      el.screenImage.src = q.imageUrl;
+    }
+
+    // choices
+    if (el.screenChoices) {
+      el.screenChoices.style.display = "block";
+      el.screenChoices.innerHTML = "";
+      (q?.options || []).forEach((opt, idx) => {
         const div = document.createElement("div");
         div.className = "screenChoice";
+        div.dataset.idx = String(idx + 1);
         div.textContent = `${idx + 1}. ${opt}`;
-        qChoices.appendChild(div);
+        el.screenChoices.appendChild(div);
       });
     }
 
-    const deadlineMs = calcClientDeadlineMs(state, questionReceivedAtMs ?? now);
-    startQuestionCountdown(qid, deadlineMs);
-    return;
-  }
+    // timer
+    if (el.screenTimer) {
+      el.screenTimer.style.display = "inline-block";
+      const deadlineMs = st?.deadlineMs || 0;
 
-  // votes
-  if (phase === "votes") {
-    stopQuestionCountdown();
-    if (qTimer) {
-      qTimer.style.display = "none";
-      qTimer.textContent = "";
-    }
-    if (qChoices) qChoices.style.display = "block";
-    const votes = state.votes || {};
-    if (qChoices) {
-      qChoices.innerHTML = "";
-      options.forEach((opt, idx) => {
-        const v = votes[idx + 1] || 0;
-        const div = document.createElement("div");
-        div.className = "screenChoice";
-        div.textContent = `${idx + 1}. ${opt}（${v}票）`;
-        qChoices.appendChild(div);
-      });
-    }
-    return;
-  }
-
-  // result
-  if (phase === "result") {
-    stopQuestionCountdown();
-    if (qTimer) {
-      qTimer.style.display = "none";
-      qTimer.textContent = "";
-    }
-    if (qChoices) qChoices.style.display = "block";
-    if (qChoices) {
-      qChoices.innerHTML = "";
-      options.forEach((opt, idx) => {
-        const div = document.createElement("div");
-        div.className = "screenChoice";
-        div.textContent = `${idx + 1}. ${opt}`;
-        if (correct === idx + 1) {
-          div.style.border = "4px solid #ff3333";
-          div.style.background = "#ffecec";
-          div.style.opacity = "1";
-        } else {
-          div.style.opacity = "0.2";
+      questionTimer = setInterval(() => {
+        const remain = Math.max(0, deadlineMs - nowMs());
+        const sec = Math.ceil(remain / 1000);
+        el.screenTimer.textContent = remain > 0 ? `残り ${sec} 秒` : `時間切れ`;
+        if (remain <= 0) {
+          clearTimer(questionTimer);
+          questionTimer = null;
         }
-        qChoices.appendChild(div);
-      });
+      }, 100);
     }
-    return;
   }
 
-  qHideAll();
-}
-
-function startQuestionCountdown(qid, deadlineMs) {
-  if (!qTimer) return;
-
-  if (questionCountdownForQid !== qid) {
-    stopQuestionCountdown();
-    questionCountdownForQid = qid;
-  }
-  if (questionCountdownInterval) return;
-
-  const tick = () => {
-    const remain = deadlineMs - Date.now();
-    const sec = Math.max(0, Math.ceil(remain / 1000));
-    qTimer.textContent = remain > 0 ? `残り ${sec} 秒` : "時間終了！";
-    if (remain <= 0) stopQuestionCountdown();
-  };
-
-  tick();
-  questionCountdownInterval = setInterval(tick, 200);
-}
-
-function stopQuestionCountdown() {
-  if (questionCountdownInterval) {
-    clearInterval(questionCountdownInterval);
-    questionCountdownInterval = null;
-  }
-}
-
-// --------------------- ランキング：下位→上位を下から積み上げ ---------------------
-function startStackRanking(entries, title, mode) {
-  if (!qRankingWrap || !qRankingTitle || !qRankingList) return;
-
-  stopRankingAnimation();
-
-  qRankingWrap.style.display = "flex";
-  qRankingTitle.textContent = title;
-  qRankingList.innerHTML = "";
-
-  if (!Array.isArray(entries) || entries.length === 0) {
-    const item = document.createElement("div");
-    item.className = "rankItem";
-    item.textContent = "データがありません";
-    qRankingList.appendChild(item);
-    return;
+  function qRenderVotes(q, votes) {
+    const el = qEls();
+    const nodes = el.screenChoices?.querySelectorAll(".screenChoice") || [];
+    nodes.forEach((node, idx) => {
+      const key = String(idx + 1);
+      const v = votes?.[key] ?? votes?.[idx + 1] ?? 0;
+      const base = q?.options?.[idx] ?? "";
+      node.textContent = `${idx + 1}. ${base}（${v}票）`;
+    });
   }
 
-  const sortedAsc = entries.slice().sort((a, b) => a.rank - b.rank);
-  const displayOrder = sortedAsc.slice().reverse(); // 下位→上位
+  function qRenderResult(correct) {
+    const el = qEls();
+    const nodes = el.screenChoices?.querySelectorAll(".screenChoice") || [];
+    nodes.forEach((node, idx) => {
+      const n = idx + 1;
+      if (n === correct) {
+        node.style.border = "4px solid #ff2b2b";
+        node.style.background = "rgba(255,230,230,0.95)";
+        node.style.opacity = "1";
+      } else {
+        node.style.opacity = "0.18";
+      }
+    });
+  }
 
-  let i = 0;
-  const step = () => {
-    if (i >= displayOrder.length) {
-      stopRankingAnimation();
+  function qStartRankingAnimation(title, entries, mode) {
+    // entries は rank昇順（1位→…）で受け取る
+    // 表示は「下位→上位を積み上げ」なので、最後から出して「上に追加」
+    const el = qEls();
+    qHideAll();
+
+    if (!el.screenRanking) return;
+
+    el.screenRanking.style.display = "flex";
+    el.rankingTitle.textContent = title || "";
+    el.rankingList.innerHTML = "";
+
+    clearTimeoutSafe(rankTimer);
+    rankTimer = null;
+
+    const arr = (entries || []).slice(); // 1..N
+    let i = arr.length - 1;              // 下位から
+
+    const step = () => {
+      if (i < 0) return;
+
+      const e = arr[i];
+
+      const li = document.createElement("li");
+      if (mode === "time") {
+        li.textContent = `${e.rank}位：${e.name}（${fmtSec(e.timeMs)}秒）`;
+      } else {
+        li.textContent = `${e.rank}位：${e.name}（${e.score}点）`;
+      }
+
+      // ★ 上に積み上げたいので "prepend"
+      el.rankingList.prepend(li);
+
+      i--;
+      rankTimer = setTimeout(step, RANK_ANIM_INTERVAL);
+    };
+
+    step();
+  }
+
+  /* ======================================================
+     Room Snapshot
+  ====================================================== */
+  function listenRoom() {
+    if (unsubRoom) unsubRoom();
+
+    unsubRoom = FS.onSnapshot(roomRef(), async (snap) => {
+      if (!snap.exists()) return;
+
+      const data = snap.data() || {};
+      const st = data.state || { phase: "idle" };
+
+      currentState = st;
+
+      // Index
+      if (isIndexPage()) {
+        await handleIndexState(st);
+      }
+
+      // Question
+      if (isQuestionPage()) {
+        await handleQuestionState(st);
+      }
+    });
+  }
+
+  async function handleIndexState(st) {
+    const el = idxEls();
+    if (!el.waitingArea) return;
+
+    // 参加前は触らない（joinGameで listener 開始）
+    if (!playerId || !playerName) return;
+
+    // phase に応じて「回答欄だけ」出す
+    if (st.phase === "question" && st.currentQuestion) {
+      const q = await loadQuestion(st.currentQuestion);
+
+      // 締切判定（index側で止める）
+      const enabled = (st.deadlineMs && nowMs() <= st.deadlineMs);
+
+      idxShowWaiting("");      // waitingAreaは消さずに空にする（レイアウト保持）
+      idxRenderChoices(q?.options || [], enabled);
+
+      if (!enabled) {
+        idxDisableAllChoices();
+      } else {
+        // deadline後に自動で押せなくする（ボタン操作不要）
+        const remain = Math.max(0, st.deadlineMs - nowMs());
+        setTimeout(() => idxDisableAllChoices(), remain + 50);
+      }
       return;
     }
-    const p = displayOrder[i++];
-    const item = document.createElement("div");
-    item.className = "rankItem";
 
-    if (mode === "time") {
-      const sec = ((p.timeMs || 0) / 1000).toFixed(2);
-      item.textContent = `${p.rank}位：${p.name}（${sec}秒）`;
-    } else {
-      item.textContent = `${p.rank}位：${p.name}（${p.totalScore ?? 0}点）`;
+    // それ以外は回答欄非表示
+    idxHideChoices();
+
+    if (st.phase === "intro") {
+      idxShowWaiting("司会の合図を待っています…");
+      return;
     }
-    qRankingList.appendChild(item);
-  };
+    if (st.phase === "votes" || st.phase === "result" || st.phase === "ranking") {
+      idxShowWaiting("集計中…");
+      return;
+    }
+    if (st.phase === "final") {
+      idxShowWaiting("最終結果発表中…");
+      return;
+    }
 
-  step();
-  rankingInterval = setInterval(step, 1000);
-}
-
-function stopRankingAnimation() {
-  if (rankingInterval) {
-    clearInterval(rankingInterval);
-    rankingInterval = null;
+    // idle / waiting
+    idxShowWaiting("司会の合図があるまでお待ちください…");
   }
-}
 
-// --------------------- admin API（admin.htmlから呼ぶ） ---------------------
-async function admin_setWaiting() {
-  if (!FS) return alert("読み込み中です");
-  await ensureRoomDoc();
-  await FS.setDoc(roomRef(), { state: { phase: "waiting" } }, { merge: true });
-}
+  async function handleQuestionState(st) {
+    // idle は「背景のみ」
+    if (!st || st.phase === "idle") {
+      qHideAll();
+      return;
+    }
 
-// ★ admin.html の待機ボタン用（互換）
-async function admin_resetScreen() {
-  return admin_setWaiting();
-}
+    const qid = st.currentQuestion;
+    const q = qid ? await loadQuestion(qid) : null;
 
-async function admin_showIntro(qid) {
-  if (!FS) return alert("読み込み中です");
-  await ensureRoomDoc();
+    if (st.phase === "intro") {
+      qRenderIntro(q);
+      return;
+    }
 
-  await FS.setDoc(answersRef(qid), {}); // 前回回答リセット
+    if (st.phase === "question") {
+      qRenderQuestion(q, st);
+      return;
+    }
 
-  await FS.setDoc(
-    roomRef(),
-    {
+    if (st.phase === "votes") {
+      // 投票数は choice の上に票数を足す
+      qRenderQuestion(q, st);
+      // timerは不要なので非表示
+      const el = qEls();
+      if (el.screenTimer) el.screenTimer.style.display = "none";
+      qRenderVotes(q, st.votes);
+      return;
+    }
+
+    if (st.phase === "result") {
+      qRenderQuestion(q, st);
+      const el = qEls();
+      if (el.screenTimer) el.screenTimer.style.display = "none";
+      // votes も残っているなら表示してから正解強調
+      if (st.votes) qRenderVotes(q, st.votes);
+      qRenderResult(st.correct);
+      return;
+    }
+
+    if (st.phase === "ranking") {
+      qStartRankingAnimation("正解者ランキング（上位10名）", st.ranking || [], "time");
+      return;
+    }
+
+    if (st.phase === "final") {
+      qStartRankingAnimation("最終結果ランキング", st.finalRanking || [], "score");
+      return;
+    }
+  }
+
+  /* ======================================================
+     Index: Join / Answer
+  ====================================================== */
+  async function joinGame() {
+    if (!FS || !db) {
+      alert("Firestore の準備中です。少し待ってから再度お試しください。");
+      return;
+    }
+
+    const el = idxEls();
+    const name = el.nameInput?.value?.trim();
+    if (!name) {
+      alert("ニックネームを入力してください");
+      return;
+    }
+
+    // playerId 作成
+    if (!playerId) {
+      playerId = makeId(12);
+      localStorage.setItem("playerId", playerId);
+    }
+    playerName = name;
+    localStorage.setItem("playerName", name);
+
+    // 既存 score を壊さないように：存在確認
+    const pRef = playerRef(playerId);
+    const pSnap = await FS.getDoc(pRef);
+
+    if (!pSnap.exists()) {
+      await FS.setDoc(pRef, {
+        name,
+        score: 0,
+        joinedAt: FS.serverTimestamp ? FS.serverTimestamp() : new Date().toISOString(),
+        lastSeenAt: FS.serverTimestamp ? FS.serverTimestamp() : new Date().toISOString(),
+      });
+    } else {
+      await FS.setDoc(pRef, {
+        name,
+        lastSeenAt: FS.serverTimestamp ? FS.serverTimestamp() : new Date().toISOString(),
+      }, { merge: true });
+    }
+
+    // UI
+    if (el.joinArea) el.joinArea.style.display = "none";
+    idxShowWaiting("司会の合図があるまでお待ちください…");
+
+    // listen start
+    listenRoom();
+  }
+
+  async function answer(optIdx) {
+    if (!playerId) return;
+
+    // state を保持しているので getDoc しない
+    const st = currentState;
+    if (!st || st.phase !== "question" || !st.currentQuestion) return;
+
+    // index側で締切判定（自動）
+    if (st.deadlineMs && nowMs() > st.deadlineMs) {
+      idxDisableAllChoices();
+      idxShowWaiting("時間切れです（投票できません）");
+      return;
+    }
+
+    // UI: 選んだ選択肢を分かるように
+    idxHighlightChoice(optIdx);
+    idxDisableAllChoices();
+
+    const qid = st.currentQuestion;
+
+    // answers/{qid} に pid: {opt, atMs} を保存（merge）
+    await FS.setDoc(
+      answersRef(qid),
+      { [playerId]: { opt: optIdx, atMs: nowMs() } },
+      { merge: true }
+    );
+
+    // lastSeen
+    await FS.setDoc(playerRef(playerId), {
+      lastSeenAt: FS.serverTimestamp ? FS.serverTimestamp() : new Date().toISOString(),
+    }, { merge: true });
+  }
+
+  /* ======================================================
+     Admin Functions
+     ※ admin.html の onclick から呼ばれるので window に生やす
+  ====================================================== */
+
+  async function admin_resetScreen() {
+    if (!FS) return alert("読み込み中です");
+    await FS.setDoc(roomRef(), {
+      state: {
+        phase: "idle",
+        currentQuestion: null,
+        startedAtMs: null,
+        deadlineMs: null,
+        votes: null,
+        correct: null,
+        ranking: null,
+        finalRanking: null,
+        scoredQid: null,
+      }
+    }, { merge: true });
+  }
+
+  async function admin_showIntro(qid) {
+    if (!FS) return alert("読み込み中です");
+    await FS.setDoc(roomRef(), {
       state: {
         phase: "intro",
         currentQuestion: qid,
         votes: null,
         correct: null,
         ranking: null,
-        finalRanking: null
       }
-    },
-    { merge: true }
-  );
-}
+    }, { merge: true });
+  }
 
-// 選択肢表示＆回答開始（secondsは state にも保存）
-async function admin_startQuestion(qid, seconds = DEFAULT_SECONDS) {
-  if (!FS) return alert("読み込み中です");
-  await ensureRoomDoc();
+  async function admin_startQuestion(qid) {
+    if (!FS) return alert("読み込み中です");
+    const startedAtMs = nowMs();
+    const deadlineMs = startedAtMs + ANSWER_LIMIT_MS;
 
-  await FS.setDoc(answersRef(qid), {}); // 回答リセット
-
-  const startAtMs = Date.now();
-  const deadlineMs = startAtMs + seconds * 1000;
-
-  await FS.setDoc(
-    roomRef(),
-    {
+    await FS.setDoc(roomRef(), {
       state: {
         phase: "question",
         currentQuestion: qid,
-        seconds,
-        startAt: FS.serverTimestamp(),
-        startAtMs,
+        startedAtMs,
         deadlineMs,
         votes: null,
         correct: null,
         ranking: null,
-        finalRanking: null
       }
-    },
-    { merge: true }
-  );
-}
-
-async function admin_showVotes(qid) {
-  if (!FS) return alert("読み込み中です");
-  await ensureRoomDoc();
-
-  const qSnap = await FS.getDoc(questionRef(qid));
-  const optLen = qSnap.exists() && Array.isArray(qSnap.data().options) ? qSnap.data().options.length : 4;
-
-  const ansSnap = await FS.getDoc(answersRef(qid));
-  const data = ansSnap.exists() ? ansSnap.data() : {};
-
-  const counts = {};
-  for (let i = 1; i <= optLen; i++) counts[i] = 0;
-
-  for (const pid in data) {
-    const entry = data[pid];
-    const v = entry?.option;
-    if (counts[v] != null) counts[v]++;
+    }, { merge: true });
   }
 
-  await FS.setDoc(
-    roomRef(),
-    {
+  async function admin_showVotes(qid) {
+    if (!FS) return alert("読み込み中です");
+
+    // 選択肢数を知るため question 読む
+    const q = await loadQuestion(qid);
+    const optLen = (q?.options || []).length || 4;
+
+    // answers 読む
+    const aSnap = await FS.getDoc(answersRef(qid));
+    const data = aSnap.exists() ? (aSnap.data() || {}) : {};
+
+    // counts
+    const counts = {};
+    for (let i = 1; i <= optLen; i++) counts[String(i)] = 0;
+
+    for (const pid in data) {
+      const v = data[pid];
+      let opt = null;
+      if (typeof v === "number") opt = v;
+      if (typeof v === "object" && v && typeof v.opt === "number") opt = v.opt;
+      if (opt != null && counts[String(opt)] !== undefined) counts[String(opt)]++;
+    }
+
+    await FS.setDoc(roomRef(), {
       state: {
         phase: "votes",
         currentQuestion: qid,
         votes: counts
       }
-    },
-    { merge: true }
-  );
-}
+    }, { merge: true });
+  }
 
-// admin.html から (qid, correct) で呼ばれても壊れないように第2引数を受け取る
-async function admin_reveal(qid /*, correctFromHtml */) {
-  if (!FS) return alert("読み込み中です");
-  await ensureRoomDoc();
+  async function admin_reveal(qid, correct) {
+    if (!FS) return alert("読み込み中です");
 
-  const qSnap = await FS.getDoc(questionRef(qid));
-  const correct = qSnap.exists() ? qSnap.data().correct : null;
+    // すでに採点済みなら二重加算しない
+    const st = await readRoomState();
+    if (!st) return;
 
-  await FS.setDoc(
-    roomRef(),
-    {
+    // scoring必要か？
+    const alreadyScored = (st.scoredQid === qid);
+
+    // votes が無いならついでに計算して残しておく（任意）
+    let votes = st.votes || null;
+    if (!votes) {
+      const q = await loadQuestion(qid);
+      const optLen = (q?.options || []).length || 4;
+      const aSnap = await FS.getDoc(answersRef(qid));
+      const data = aSnap.exists() ? (aSnap.data() || {}) : {};
+      votes = {};
+      for (let i = 1; i <= optLen; i++) votes[String(i)] = 0;
+      for (const pid in data) {
+        const v = data[pid];
+        let opt = null;
+        if (typeof v === "number") opt = v;
+        if (typeof v === "object" && v && typeof v.opt === "number") opt = v.opt;
+        if (opt != null && votes[String(opt)] !== undefined) votes[String(opt)]++;
+      }
+    }
+
+    if (!alreadyScored) {
+      await scoreQuestionOnce(qid, correct, st.startedAtMs, st.deadlineMs);
+      await FS.setDoc(roomRef(), { state: { scoredQid: qid } }, { merge: true });
+    }
+
+    await FS.setDoc(roomRef(), {
       state: {
         phase: "result",
         currentQuestion: qid,
-        correct
+        correct,
+        votes,
       }
-    },
-    { merge: true }
-  );
-}
-
-// 正解者ランキング＋得点計算（採点済み管理は doc 直下に保持）
-async function admin_showRanking(qid /*, correctFromHtml */) {
-  if (!FS) return alert("読み込み中です");
-  await ensureRoomDoc();
-
-  const roomSnap = await FS.getDoc(roomRef());
-  const roomData = roomSnap.exists() ? roomSnap.data() : {};
-  const state = roomData.state || {};
-
-  const scoredQuestions = roomData.scoredQuestions || {};
-  const alreadyScored = !!scoredQuestions[String(qid)];
-
-  const qSnap = await FS.getDoc(questionRef(qid));
-  const qData = qSnap.exists() ? qSnap.data() : {};
-  const correct = qData.correct;
-
-  const startAtMs =
-    toMillis(state.startAt) || (typeof state.startAtMs === "number" ? state.startAtMs : null);
-
-  const ansSnap = await FS.getDoc(answersRef(qid));
-  const answers = ansSnap.exists() ? ansSnap.data() : {};
-
-  // players
-  const pSnap = await FS.getDocs(FS.collection(db, "rooms", ROOM_ID, "players"));
-  const players = {};
-  pSnap.forEach((doc) => {
-    const d = doc.data() || {};
-    players[doc.id] = {
-      name: d.name || "名無し",
-      score: typeof d.score === "number" ? d.score : 0
-    };
-  });
-
-  // 正解者抽出
-  const correctList = [];
-  for (const pid in answers) {
-    const entry = answers[pid];
-    if (!entry || entry.option !== correct) continue;
-
-    const ansMs = toMillis(entry.answeredAt) || entry.answeredAtMs || null;
-    if (ansMs == null || startAtMs == null) continue;
-
-    correctList.push({
-      pid,
-      name: players[pid]?.name || "名無し",
-      timeMs: Math.max(0, ansMs - startAtMs)
-    });
+    }, { merge: true });
   }
 
-  correctList.sort((a, b) => a.timeMs - b.timeMs);
+  async function scoreQuestionOnce(qid, correct, startedAtMs, deadlineMs) {
+    // answers
+    const aSnap = await FS.getDoc(answersRef(qid));
+    const answers = aSnap.exists() ? (aSnap.data() || {}) : {};
 
-  const ranking = correctList.slice(0, 10).map((p, idx) => ({
-    rank: idx + 1,
-    name: p.name,
-    timeMs: p.timeMs
-  }));
+    // players（現在いる全員）
+    const pSnap = await FS.getDocs(playersCol());
+    const players = [];
+    pSnap.forEach(doc => {
+      const d = doc.data() || {};
+      players.push({
+        id: doc.id,
+        name: d.name || doc.id,
+        score: typeof d.score === "number" ? d.score : 0,
+      });
+    });
 
-  // 得点計算（未スコアリング時のみ）
-  if (!alreadyScored) {
-    for (let i = 0; i < correctList.length; i++) {
-      const p = correctList[i];
-      let add = 10;
-      if (i === 0) add += 5;
-      else if (i === 1) add += 3;
-      else if (i === 2) add += 1;
+    // 正解者の timeMs を計算
+    const correctOnes = [];
+    for (const p of players) {
+      const a = answers[p.id];
+      let opt = null;
+      let atMs = null;
 
-      const newScore = (players[p.pid]?.score || 0) + add;
-      players[p.pid].score = newScore;
-      await FS.updateDoc(playerRef(p.pid), { score: newScore });
+      if (typeof a === "number") {
+        opt = a;
+      } else if (typeof a === "object" && a) {
+        if (typeof a.opt === "number") opt = a.opt;
+        if (typeof a.atMs === "number") atMs = a.atMs;
+      }
+
+      if (opt === correct) {
+        // timeMs（無ければ大きい値）
+        let timeMs = 9_999_999;
+        if (typeof atMs === "number" && typeof startedAtMs === "number") {
+          timeMs = Math.max(0, atMs - startedAtMs);
+        }
+        // deadline超えを正解扱いしない場合はここで除外も可
+        if (typeof deadlineMs === "number" && typeof atMs === "number" && atMs > deadlineMs) {
+          continue; // 締切後は無効
+        }
+        correctOnes.push({ pid: p.id, timeMs });
+      }
     }
 
-    const newScored = { ...(scoredQuestions || {}), [String(qid)]: true };
-    await FS.setDoc(roomRef(), { scoredQuestions: newScored }, { merge: true });
+    // 正解者全員 +10
+    const addMap = new Map(); // pid -> addScore
+    for (const c of correctOnes) addMap.set(c.pid, (addMap.get(c.pid) || 0) + 10);
+
+    // 早押し上位3名 +5,+3,+1
+    correctOnes.sort((a, b) => a.timeMs - b.timeMs);
+    const bonus = [5, 3, 1];
+    for (let i = 0; i < Math.min(3, correctOnes.length); i++) {
+      const pid = correctOnes[i].pid;
+      addMap.set(pid, (addMap.get(pid) || 0) + bonus[i]);
+    }
+
+    // update
+    for (const p of players) {
+      const add = addMap.get(p.id) || 0;
+      if (add === 0) continue;
+      await FS.updateDoc(playerRef(p.id), { score: p.score + add });
+    }
   }
 
-  await FS.setDoc(
-    roomRef(),
-    {
+  async function admin_showRanking(qid, correct) {
+    if (!FS) return alert("読み込み中です");
+
+    const st = await readRoomState();
+    const startedAtMs = st?.startedAtMs;
+    const deadlineMs = st?.deadlineMs;
+
+    const aSnap = await FS.getDoc(answersRef(qid));
+    const answers = aSnap.exists() ? (aSnap.data() || {}) : {};
+
+    const pSnap = await FS.getDocs(playersCol());
+    const nameMap = new Map();
+    pSnap.forEach(doc => {
+      const d = doc.data() || {};
+      nameMap.set(doc.id, d.name || doc.id);
+    });
+
+    // 正解者
+    const correctOnes = [];
+    for (const [pid, a] of Object.entries(answers)) {
+      let opt = null;
+      let atMs = null;
+
+      if (typeof a === "number") opt = a;
+      else if (typeof a === "object" && a) {
+        if (typeof a.opt === "number") opt = a.opt;
+        if (typeof a.atMs === "number") atMs = a.atMs;
+      }
+
+      if (opt !== correct) continue;
+
+      if (typeof deadlineMs === "number" && typeof atMs === "number" && atMs > deadlineMs) {
+        continue; // 締切後は無効
+      }
+
+      let timeMs = 9_999_999;
+      if (typeof atMs === "number" && typeof startedAtMs === "number") {
+        timeMs = Math.max(0, atMs - startedAtMs);
+      }
+      correctOnes.push({ pid, timeMs });
+    }
+
+    correctOnes.sort((a, b) => a.timeMs - b.timeMs);
+    const top = correctOnes.slice(0, 10).map((x, i) => ({
+      rank: i + 1,
+      name: nameMap.get(x.pid) || x.pid,
+      timeMs: x.timeMs,
+    }));
+
+    await FS.setDoc(roomRef(), {
       state: {
         phase: "ranking",
         currentQuestion: qid,
-        correct,
-        ranking
+        ranking: top
       }
-    },
-    { merge: true }
-  );
-}
+    }, { merge: true });
+  }
 
-// 最終結果（admin.html のボタン名に合わせて両方用意）
-async function admin_showFinalRanking() {
-  if (!FS) return alert("読み込み中です");
-  await ensureRoomDoc();
+  async function admin_showFinalRanking() {
+    if (!FS) return alert("読み込み中です");
 
-  const playersSnap = await FS.getDocs(FS.collection(db, "rooms", ROOM_ID, "players"));
-  const players = [];
-  playersSnap.forEach((doc) => {
-    const d = doc.data() || {};
-    players.push({
-      name: d.name || "名無し",
-      totalScore: typeof d.score === "number" ? d.score : 0
+    const pSnap = await FS.getDocs(playersCol());
+    const arr = [];
+    pSnap.forEach(doc => {
+      const d = doc.data() || {};
+      arr.push({
+        pid: doc.id,
+        name: d.name || doc.id,
+        score: typeof d.score === "number" ? d.score : 0,
+      });
     });
-  });
 
-  players.sort((a, b) => b.totalScore - a.totalScore);
+    // score desc
+    arr.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
 
-  const finalRanking = players.map((p, idx) => ({
-    rank: idx + 1,
-    name: p.name,
-    totalScore: p.totalScore
-  }));
+    const ranked = arr.map((x, i) => ({
+      rank: i + 1,
+      name: x.name,
+      score: x.score,
+    }));
 
-  await FS.setDoc(
-    roomRef(),
-    {
+    await FS.setDoc(roomRef(), {
       state: {
         phase: "final",
-        finalRanking
+        finalRanking: ranked
       }
-    },
-    { merge: true }
-  );
-}
+    }, { merge: true });
+  }
 
-// 旧名互換
-async function admin_showFinal() {
-  return admin_showFinalRanking();
-}
+  /* ======================================================
+     init
+  ====================================================== */
+  function initWhenReady() {
+    db = window.firebaseDB;
+    FS = window.firebaseFirestoreFuncs;
 
-// --------------------- windowへ公開（onclick用） ---------------------
-window.joinGame = joinGame;
+    if (!db || !FS) return false;
 
-window.admin_setWaiting = admin_setWaiting;
-window.admin_resetScreen = admin_resetScreen;
+    // admin/index から呼べるように
+    window.joinGame = joinGame;
+    window.answer = answer;
 
-window.admin_showIntro = admin_showIntro;
-window.admin_startQuestion = admin_startQuestion;
-window.admin_showVotes = admin_showVotes;
-window.admin_reveal = admin_reveal;
-window.admin_showRanking = admin_showRanking;
+    window.admin_resetScreen = admin_resetScreen;
+    window.admin_showIntro = admin_showIntro;
+    window.admin_startQuestion = admin_startQuestion;
+    window.admin_showVotes = admin_showVotes;
+    window.admin_reveal = admin_reveal;
+    window.admin_showRanking = admin_showRanking;
+    window.admin_showFinalRanking = admin_showFinalRanking;
 
-window.admin_showFinalRanking = admin_showFinalRanking;
-window.admin_showFinal = admin_showFinal;
-
-// --------------------- 起動（firebase注入待ち） ---------------------
-async function initFirebaseWait() {
-  for (let i = 0; i < 200; i++) {
-    if (window.firebaseDB && window.firebaseFirestoreFuncs) {
-      db = window.firebaseDB;
-      FS = window.firebaseFirestoreFuncs;
-      return true;
+    // question は参加不要なので常時 listen
+    if (isQuestionPage()) {
+      listenRoom();
     }
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  return false;
-}
 
-window.addEventListener("load", async () => {
-  const ok = await initFirebaseWait();
-  if (!ok) {
-    console.error("Firebaseが初期化されていません");
-    return;
+    // index は join 後に listen を開始する（ただし、名前入力の復元だけ）
+    if (isIndexPage()) {
+      const el = idxEls();
+      if (playerName && el.nameInput) el.nameInput.value = playerName;
+    }
+
+    return true;
   }
 
-  // index：名前復元
-  if (isIndex && playerName && nameInput) nameInput.value = playerName;
+  window.addEventListener("load", () => {
+    // Firebase 注入は module なので、ちょい待つことがある
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      if (initWhenReady()) {
+        clearInterval(timer);
+      } else if (tries > 50) {
+        clearInterval(timer);
+        console.error("Firebase init timeout: window.firebaseDB / funcs が見つかりません");
+      }
+    }, 100);
+  });
 
-  // index：joinボタン
-  if (isIndex && joinBtn) joinBtn.onclick = joinGame;
-
-  // question：常時監視
-  if (isQuestion) {
-    await ensureRoomDoc();
-    listenState();
-  }
-});
+})();
 
 
 
