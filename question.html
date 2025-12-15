@@ -20,6 +20,7 @@
       serverTimestamp
     } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
 
+    // ★あなたの firebaseConfig をここに入れてください（今のままOK）
   const firebaseConfig = {
     apiKey: "AIzaSyDqEcoMwo3BM9g_0MnKCdXDVtfg0qv-bHg",
     authDomain: "quiz-party2025.firebaseapp.com",
@@ -39,23 +40,18 @@
   </script>
 
   <style>
-    html, body {
-      margin: 0;
-      padding: 0;
-      height: 100%;
-    }
+    html, body { margin: 0; padding: 0; height: 100%; }
 
     body {
       font-family: system-ui, sans-serif;
       padding: 32px;
       color: #111;
+
+      /* 背景：黒余白を出さずに埋めたい → cover */
       background: #000 url("picture_quiz/bg_quiz.png") center center / cover no-repeat fixed;
     }
 
-    /* 画面全体の入れ物 */
-    #screen {
-      min-height: calc(100vh - 64px);
-    }
+    #screen { min-height: calc(100vh - 64px); }
 
     /* 問題文 */
     #screenQuestionText {
@@ -92,11 +88,8 @@
       background: rgba(255,255,255,0.8);
     }
 
-    /* 選択肢（画面共有用） */
-    #screenChoices {
-      display: none;
-      margin-top: 8px;
-    }
+    /* 選択肢 */
+    #screenChoices { display: none; margin-top: 8px; }
 
     .screenChoice {
       font-size: 24px;
@@ -110,7 +103,7 @@
 
     /* ランキング（中央表示） */
     #screenRanking {
-      display: none; /* 待機時は一切出さない＝背景のみ */
+      display: none; /* 待機は背景のみ */
       justify-content: center;
       align-items: center;
       min-height: calc(100vh - 64px);
@@ -130,7 +123,7 @@
       margin: 0 0 16px;
     }
 
-    /* ★ここが「下から積み上げ」の肝：column-reverse */
+    /* 下から積み上げ */
     #rankingList {
       display: flex;
       flex-direction: column-reverse;
@@ -147,11 +140,11 @@
     }
   </style>
 
-  <script src="script.js"></script>
+  <script src="script.js" defer></script>
 </head>
 
 <body>
-  <!-- 初期は背景のみ（何も出さない） -->
+  <!-- 初期は背景のみ（何も出ない） -->
   <div id="screen">
     <div id="screenQuestionText"></div>
     <div id="screenTimer"></div>
@@ -167,6 +160,7 @@
   </div>
 </body>
 </html>
+
 
 
 
