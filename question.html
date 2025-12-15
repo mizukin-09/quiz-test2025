@@ -20,15 +20,14 @@
       serverTimestamp
     } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
 
-    const firebaseConfig = {
-      // ★あなたの既存の値をそのまま★
-      apiKey: "（ここはあなたの値）",
-      authDomain: "（ここはあなたの値）",
-      projectId: "（ここはあなたの値）",
-      storageBucket: "（ここはあなたの値）",
-      messagingSenderId: "（ここはあなたの値）",
-      appId: "（ここはあなたの値）"
-    };
+  const firebaseConfig = {
+    apiKey: "AIzaSyDqEcoMwo3BM9g_0MnKCdXDVtfg0qv-bHg",
+    authDomain: "quiz-party2025.firebaseapp.com",
+    projectId: "quiz-party2025",
+    storageBucket: "quiz-party2025.firebasestorage.app",
+    messagingSenderId: "929065994714",
+    appId: "1:929065994714:web:196ebcf0208fd1096b98e3"
+  };
 
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
