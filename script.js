@@ -182,58 +182,111 @@
     const waitingArea = document.getElementById("waitingArea");
     const choicesDiv = document.getElementById("choices");
 
-    if (!st || st.phase !== "question") {
-      // 回答フェーズ以外は「待機」だけ（スマホは回答欄だけで良い）
+    // Firestore state が無い/待機
+    if (!st || st.phase === "waiting") {
       stopIndexTimer();
       choicesDiv.innerHTML = "";
       idxCurrentQuestionKey = null;
       idxSelectedOption = null;
 
       waitingArea.style.display = "block";
-      waitingArea.textContent =
-        st && st.phase === "intro" ? "問題を確認してください…" : "司会の合図があるまでお待ちください…";
+      waitingArea.textContent = "司会の合図があるまでお待ちください…";
       return;
     }
 
-    // --- question phase ---
-    const qid = st.currentQuestion;
-    const qKey = st.questionKey; // 重要：毎回ユニーク（過去投票と混ざらない）
-    const deadlineMs = st.deadlineMs || 0;
-
-    if (!qid || !qKey) {
-      waitingArea.style.display = "block";
-      waitingArea.textContent = "準備中です…";
-      return;
-    }
-
-    // 問題切り替え（questionKeyが変わったら描画し直す）
-    if (qKey !== idxCurrentQuestionKey) {
-      idxCurrentQuestionKey = qKey;
+    // 出題（問題だけ）
+    if (st.phase === "intro") {
+      stopIndexTimer();
+      choicesDiv.innerHTML = "";
+      idxCurrentQuestionKey = null;
       idxSelectedOption = null;
-      await renderIndexChoices(qid);
-    }
 
-    // タイマー（残り表示＋自動投票不可）
-    stopIndexTimer();
-    const tick = () => {
-      const remain = deadlineMs - nowMs();
-      const sec = Math.max(0, Math.floor(remain / 1000));
       waitingArea.style.display = "block";
-      waitingArea.textContent = `残り ${sec} 秒`;
-
-      if (remain <= 0) {
-        disableIndexChoices("時間切れです");
-      }
-    };
-    tick();
-    idxTimerInterval = setInterval(tick, 200);
-
-    // 時間内なら押せる（ただし既に回答済みなら押せない）
-    if (nowMs() < deadlineMs && idxSelectedOption == null) {
-      enableIndexChoices();
-    } else {
-      disableIndexChoices();
+      waitingArea.textContent = "問題を確認してください…";
+      return;
     }
+
+    // 選択肢を出し続けたいフェーズ（回答中 / 投票数表示 / 正解発表）
+    if (st.phase === "question" || st.phase === "votes" || st.phase === "result") {
+      const qid = st.currentQuestion;
+      const qKey = st.questionKey; // 毎回ユニーク
+      const deadlineMs = st.deadlineMs || 0;
+
+      if (!qid || !qKey) {
+        stopIndexTimer();
+        choicesDiv.innerHTML = "";
+        idxCurrentQuestionKey = null;
+
+        waitingArea.style.display = "block";
+        waitingArea.textContent = "準備中です…";
+        return;
+      }
+
+      // 問題切り替え（questionKeyが変わったら描画し直す）
+      if (qKey !== idxCurrentQuestionKey) {
+        idxCurrentQuestionKey = qKey;
+        idxSelectedOption = null;
+        await renderIndexChoices(qid);
+      }
+
+      // --- question phase ---
+      if (st.phase === "question") {
+        // タイマー（残り表示＋自動投票不可）
+        stopIndexTimer();
+        const tick = () => {
+          const remain = deadlineMs - nowMs();
+          const sec = Math.max(0, Math.ceil(remain / 1000)); // 10→9→…→0
+          waitingArea.style.display = "block";
+          waitingArea.textContent = `残り ${sec} 秒`;
+
+          if (remain <= 0) {
+            disableIndexChoices();
+          }
+        };
+        tick();
+        idxTimerInterval = setInterval(tick, 200);
+
+        // 時間内なら押せる（ただし既に回答済みなら押せない）
+        if (nowMs() < deadlineMs && idxSelectedOption == null) {
+          enableIndexChoices();
+        } else {
+          disableIndexChoices();
+        }
+        return;
+      }
+
+      // --- votes phase ---
+      if (st.phase === "votes") {
+        stopIndexTimer();
+        waitingArea.style.display = "block";
+        waitingArea.textContent = "投票数を集計中…";
+
+        // 選択肢は残したまま（回答済みなら自分の選択が分かる）
+        disableIndexChoices();
+        highlightIndexChoiceAndCorrect(idxSelectedOption, null);
+        return;
+      }
+
+      // --- result phase ---
+      if (st.phase === "result") {
+        stopIndexTimer();
+        waitingArea.style.display = "block";
+        waitingArea.textContent = "正解発表！";
+
+        disableIndexChoices();
+        highlightIndexChoiceAndCorrect(idxSelectedOption, st.correct ?? null);
+        return;
+      }
+    }
+
+    // それ以外（ランキング/最終結果など）は待機表示に寄せる
+    stopIndexTimer();
+    choicesDiv.innerHTML = "";
+    idxCurrentQuestionKey = null;
+    idxSelectedOption = null;
+
+    waitingArea.style.display = "block";
+    waitingArea.textContent = "司会の合図があるまでお待ちください…";
   }
 
   async function renderIndexChoices(qid) {
@@ -283,6 +336,30 @@
       }
     });
   }
+
+  // selectedOpt: 自分の選択（無ければ null）
+  // correctOpt: 正解（無ければ null）※正解発表時に使う
+  function highlightIndexChoiceAndCorrect(selectedOpt, correctOpt) {
+    const btns = Array.from(document.querySelectorAll(".choiceBtn"));
+    btns.forEach((b, i) => {
+      const myOpt = i + 1;
+      b.classList.remove("selected", "dim", "correct");
+
+      if (correctOpt != null && myOpt === correctOpt) {
+        b.classList.add("correct"); // 赤枠
+      }
+    });
+
+    btns.forEach((b, i) => {
+      const myOpt = i + 1;
+      const isSel = selectedOpt != null && myOpt === selectedOpt;
+      const isCor = correctOpt != null && myOpt === correctOpt;
+
+      if (isSel) b.classList.add("selected"); // 青枠（自分の選択）
+      if (!isSel && !isCor) b.classList.add("dim"); // それ以外は薄く
+    });
+  }
+
 
   async function indexAnswer(opt) {
     if (!idxJoined || !playerId) {
@@ -443,7 +520,7 @@
     const elChoices = document.getElementById("screenChoices");
 
     elProblem.style.display = "block";
-    elTimerBox.style.display = "block";
+    elTimerBox.style.display = "flex";
     elChoices.style.display = "block";
 
     elText.style.display = "block";
@@ -462,7 +539,12 @@
     (q.options || []).forEach((opt, idx) => {
       const d = document.createElement("div");
       d.className = "screenChoice";
-      d.textContent = `${idx + 1}. ${opt}`;
+
+      const span = document.createElement("span");
+      span.className = "choiceMainText";
+      span.textContent = `${idx + 1}. ${opt}`;
+      d.appendChild(span);
+
       elChoices.appendChild(d);
     });
 
@@ -471,9 +553,9 @@
       const remain = (deadlineMs || 0) - nowMs();
       const sec = Math.max(0, Math.ceil(remain / 1000));
       elTimer.style.display = "block";
-      elTimer.textContent = `${sec}s`;
+      elTimer.textContent = `${sec}`;
       if (remain <= 0) {
-        elTimer.textContent = `0s`;
+        elTimer.textContent = `0`;
         qStopTimer();
       }
     };
@@ -492,8 +574,7 @@
     const elChoices = document.getElementById("screenChoices");
 
     elProblem.style.display = "block";
-    elTimerBox.style.display = "block"; // ラベルだけ残してもOK、数字は消す
-    document.getElementById("screenTimer").style.display = "none";
+    elTimerBox.style.display = "none";
 
     elChoices.style.display = "block";
 
@@ -512,9 +593,20 @@
     (q.options || []).forEach((opt, idx) => {
       const num = idx + 1;
       const v = votesObj?.[num] ?? 0;
+
       const d = document.createElement("div");
       d.className = "screenChoice";
-      d.textContent = `${num}. ${opt}（${v}票）`;
+
+      const span = document.createElement("span");
+      span.className = "choiceMainText";
+      span.textContent = `${num}. ${opt}`;
+
+      const vote = document.createElement("span");
+      vote.className = "voteCount";
+      vote.textContent = `${v}票`;
+
+      d.appendChild(span);
+      d.appendChild(vote);
       elChoices.appendChild(d);
     });
   }
@@ -529,8 +621,7 @@
     const elChoices = document.getElementById("screenChoices");
 
     elProblem.style.display = "block";
-    elTimerBox.style.display = "block";
-    document.getElementById("screenTimer").style.display = "none";
+    elTimerBox.style.display = "none";
 
     elChoices.style.display = "block";
 
@@ -558,7 +649,11 @@
         d.classList.add("dimChoice");
       }
 
-      d.textContent = `${num}. ${opt}`;
+      const span = document.createElement("span");
+      span.className = "choiceMainText";
+      span.textContent = `${num}. ${opt}`;
+      d.appendChild(span);
+
       elChoices.appendChild(d);
     });
   }
@@ -656,7 +751,6 @@
       finalRanking: null,
       finalKey: null,
     });
-    alert("待機画面に戻しました");
   }
 
   async function admin_showIntro(qid) {
@@ -672,7 +766,6 @@
       finalRanking: null,
       finalKey: null,
     });
-    alert(`Q${qid} を出題表示（問題だけ）にしました`);
   }
 
   async function admin_startQuestion(qid) {
@@ -696,13 +789,11 @@
     // answers doc を作っておく（なくてもOKだが安定）
     await FS.setDoc(answersRef(qKey), {}, { merge: true });
 
-    alert(`Q${qid} 回答開始（10秒）`);
   }
 
   async function admin_showVotes(qid) {
     const st = await getRoomState();
     if (!st || st.currentQuestion !== qid || !st.questionKey) {
-      alert("まず同じQの「選択肢表示＆回答開始」を押してください（questionKeyがありません）");
       return;
     }
 
@@ -724,13 +815,11 @@
       votes: counts,
     });
 
-    alert("投票数を表示しました");
   }
 
   async function admin_reveal(qid, correctIndex) {
     const st = await getRoomState();
     if (!st || st.currentQuestion !== qid || !st.questionKey) {
-      alert("まず同じQの「選択肢表示＆回答開始」を押してください");
       return;
     }
 
@@ -761,8 +850,8 @@
 
     // 点数加算
     // - 正解者全員 +10
-    // - 早押し上位3名 追加 (1位+5, 2位+3, 3位+1)
-    const bonus = [5, 3, 1];
+    // - 早押し上位3名 追加（1位〜3位は全員 +1）
+    const bonus = [1, 1, 1];
     const addMap = new Map(); // pid -> add
 
     for (const p of players) addMap.set(p.pid, 0);
@@ -788,13 +877,11 @@
       correct: correctIndex,
     });
 
-    alert("正解発表（スコア加算）しました");
   }
 
   async function admin_showRanking(qid, correctIndex) {
     const st = await getRoomState();
     if (!st || st.currentQuestion !== qid || !st.questionKey || !st.questionStartMs) {
-      alert("まず同じQの「選択肢表示＆回答開始」を押してください");
       return;
     }
 
@@ -830,7 +917,6 @@
       ranking,
     });
 
-    alert("正解者ランキングを表示しました");
   }
 
   async function admin_showFinalRanking() {
@@ -862,7 +948,6 @@
       finalKey: String(nowMs()), // token
     });
 
-    alert("最終結果ランキングを表示しました");
   }
 
   /* ======================================================
