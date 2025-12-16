@@ -20,258 +20,160 @@
       serverTimestamp
     } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore.js";
 
-    // ★ここをあなたの firebaseConfig に置き換えてください
-  const firebaseConfig = {
-    apiKey: "AIzaSyDqEcoMwo3BM9g_0MnKCdXDVtfg0qv-bHg",
-    authDomain: "quiz-party2025.firebaseapp.com",
-    projectId: "quiz-party2025",
-    storageBucket: "quiz-party2025.firebasestorage.app",
-    messagingSenderId: "929065994714",
-    appId: "1:929065994714:web:196ebcf0208fd1096b98e3"
-  };
+    const firebaseConfig = {
+      apiKey: "AIzaSyDqEcoMwo3BM9g_0MnKCdXDVtfg0qv-bHg",
+      authDomain: "quiz-party2025.firebaseapp.com",
+      projectId: "quiz-party2025",
+      storageBucket: "quiz-party2025.firebasestorage.app",
+      messagingSenderId: "929065994714",
+      appId: "1:929065994714:web:196ebcf0208fd1096b98e3"
+    };
 
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
     window.firebaseDB = db;
     window.firebaseFirestoreFuncs = {
-      doc, setDoc, getDoc, updateDoc,
-      collection, getDocs, onSnapshot, serverTimestamp
+      doc, setDoc, getDoc, updateDoc, collection, getDocs, onSnapshot, serverTimestamp
     };
   </script>
 
   <style>
-    /* 背景（黒い余白を出さない：cover） */
-    html, body {
-      height: 100%;
-      margin: 0;
-    }
-    body {
-      background: url("bg_quiz.png") center / cover no-repeat fixed;
+    html, body { margin:0; padding:0; height:100%; }
+    body{
       font-family: system-ui, sans-serif;
-      overflow: hidden;
+      padding: 32px;
+      color:#111;
+      background: #000 url("picture_quiz/bg_quiz.png") center center / cover no-repeat fixed;
     }
 
-    /* idle時は何も出さない（背景だけ） */
-    .layout { display: none; }
+    /* 全体 */
+    #screen{ min-height: calc(100vh - 64px); }
 
-    /* --- ① 出題画面（問題だけ） --- */
-    #layoutIntro {
-      height: 100vh;
-      display: none;
-      place-items: center;
-      padding: 4vh 6vw;
-    }
-    #introBox {
-      width: min(1100px, 90vw);
-      min-height: 45vh;
-      background: rgba(255,255,255,0.70);
-      border-radius: 18px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-      padding: 34px;
-      display: grid;
-      gap: 18px;
-      align-content: center;
-      text-align: center;
-    }
-    #qIntroText {
-      font-size: 46px;
-      font-weight: 900;
-      color: #111;
-      line-height: 1.25;
-    }
-    #qIntroMedia {
-      display: grid;
-      place-items: center;
-    }
-
-    /* --- ② 選択肢表示＆回答画面 --- */
-    #layoutQA {
-      height: 100vh;
-      display: none;
-      grid-template-columns: 1fr 260px;
-      gap: 22px;
-      padding: 4vh 4vw;
-      align-items: stretch;
-    }
-
-    /* 左：問題＆選択肢 */
-    #qaLeft {
-      display: grid;
-      grid-template-rows: 1fr auto;
-      gap: 18px;
-      min-height: 0;
-    }
-
-    /* 問題（画像/動画エリア） */
-    #qaMediaBox {
-      background: rgba(255,255,255,0.70);
-      border-radius: 18px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-      padding: 22px;
-      display: grid;
-      place-items: center;
-      min-height: 42vh;
-      position: relative;
-    }
-    #qaText {
-      position: absolute;
-      top: 18px;
-      left: 22px;
-      right: 22px;
-      font-size: 34px;
-      font-weight: 900;
-      text-align: center;
-      color: #111;
-      text-shadow: 0 2px 0 rgba(255,255,255,0.45);
-      pointer-events: none;
-    }
-
-    /* 選択肢 */
-    #qaChoices {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-      align-items: stretch;
-    }
-    .scrChoice {
-      background: rgba(255,255,255,0.78);
+    /* 問題表示の枠（出題/回答共通） */
+    #problemBox{
+      display:none;
+      background: rgba(255,255,255,0.86);
       border-radius: 14px;
-      border: 3px solid rgba(0,0,0,0.18);
-      padding: 14px 16px;
-      font-size: 28px;
-      font-weight: 800;
-      display: grid;
-      grid-template-columns: 180px 1fr;
-      gap: 10px;
-      align-items: center;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.18);
-    }
-    .scrChoiceLabel { opacity: 0.95; }
-    .scrChoiceText { font-weight: 900; }
-    .voteBadge { margin-left: 10px; font-weight: 900; }
-
-    .scrChoice.dim { opacity: 0.35; }
-    .scrChoice.correct {
-      border: 6px solid #d40000;
-      background: rgba(255,235,235,0.95);
-    }
-
-    /* 右：タイマー */
-    #qaRight {
-      background: rgba(255,255,255,0.70);
-      border-radius: 18px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
-      padding: 18px;
-      display: grid;
-      place-items: center;
-      text-align: center;
-    }
-    #qaTimerLabel {
-      writing-mode: vertical-rl;
-      text-orientation: upright;
-      font-size: 40px;
-      font-weight: 900;
-      letter-spacing: 2px;
-      color: #111;
+      padding: 18px 20px;
+      box-shadow: 0 8px 22px rgba(0,0,0,0.28);
       margin-bottom: 18px;
     }
-    #qaTimerBig {
-      font-size: 72px;
-      font-weight: 900;
-      color: #111;
-    }
-
-    /* 画像表示 */
-    .qMediaImg {
-      max-width: 92%;
-      max-height: 70%;
-      border-radius: 12px;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.25);
-      object-fit: contain;
-    }
-
-    /* ランキング/最終結果 overlay */
-    #overlayRanking {
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      pointer-events: none;
-    }
-    #overlayBox {
-      width: min(980px, 86vw);
-      background: rgba(255,255,255,0.82);
-      border-radius: 18px;
-      box-shadow: 0 18px 50px rgba(0,0,0,0.30);
-      padding: 22px 26px;
-    }
-    #overlayTitle {
+    #screenQuestionText{
+      display:none;
+      font-size: 34px;
+      margin: 0 0 12px;
+      font-weight: 800;
       text-align: center;
-      font-size: 36px;
-      font-weight: 900;
-      margin: 4px 0 14px;
-      color: #111;
     }
-    #overlayList {
-      display: grid;
-      gap: 10px;
-      min-height: 120px;
+    #screenImage{
+      display:none;
+      max-width: 82vw;
+      max-height: 46vh;
+      margin: 0 auto;
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+      object-fit: contain;
+      background: rgba(255,255,255,0.8);
     }
-    .rankRow {
-      background: rgba(200, 150, 110, 0.65);
-      border: 3px solid rgba(120, 70, 40, 0.8);
-      border-radius: 12px;
+
+    /* 回答画面用：タイマー枠 */
+    #timerBox{
+      display:none;
+      width: fit-content;
+      background: rgba(255,255,255,0.75);
+      border-radius: 14px;
       padding: 10px 14px;
-      display: grid;
-      grid-template-columns: 90px 1fr 160px;
-      gap: 10px;
-      font-size: 26px;
-      font-weight: 900;
-      color: #111;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+      margin-bottom: 14px;
     }
-    .rankVal { text-align: right; }
+    #screenTimer{
+      display:none;
+      font-size: 28px;
+      font-weight: 900;
+    }
+
+    /* 選択肢（画面共有用） */
+    #screenChoices{ display:none; }
+    .screenChoice{
+      font-size: 26px;
+      margin: 12px 0;
+      padding: 12px 16px;
+      background: rgba(255,255,255,0.92);
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+      border: 2px solid rgba(0,0,0,0.15);
+    }
+    .dimChoice{ opacity: 0.35; }
+    .correctChoice{
+      border: 5px solid #e00000;
+      background: rgba(255,230,230,0.95);
+      opacity: 1;
+    }
+
+    /* ランキング（中央） */
+    #screenRanking{
+      display:none;
+      justify-content:center;
+      align-items:center;
+      min-height: calc(100vh - 64px);
+    }
+    #rankingPanel{
+      width: min(760px, 92vw);
+      background: rgba(255,255,255,0.88);
+      border-radius: 16px;
+      padding: 22px 24px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.35);
+    }
+    #rankingTitle{
+      text-align:center;
+      font-size: 30px;
+      margin: 0 0 16px;
+      font-weight: 900;
+    }
+
+    /* 下から積み上げ */
+    #rankingList{
+      display:flex;
+      flex-direction: column-reverse;
+      gap: 12px;
+    }
+    .rankItem{
+      background: rgba(200, 160, 120, 0.92);
+      border: 2px solid rgba(90, 55, 25, 0.65);
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 22px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.35);
+    }
   </style>
 
-  <!-- ★重要：defer -->
-  <script src="script.js" defer></script>
+  <script src="script.js"></script>
 </head>
 
 <body>
-  <!-- ① 出題画面（問題だけ） -->
-  <div id="layoutIntro" class="layout">
-    <div id="introBox">
-      <div id="qIntroText"></div>
-      <div id="qIntroMedia"></div>
+  <div id="screen">
+    <div id="problemBox">
+      <div id="screenQuestionText"></div>
+      <img id="screenImage" alt="問題画像" />
     </div>
-  </div>
 
-  <!-- ② 選択肢表示＆回答画面 -->
-  <div id="layoutQA" class="layout">
-    <div id="qaLeft">
-      <div id="qaMediaBox">
-        <div id="qaText"></div>
-        <div id="qaMedia"></div>
+    <div id="timerBox">
+      <div id="screenTimer"></div>
+    </div>
+
+    <div id="screenChoices"></div>
+
+    <div id="screenRanking">
+      <div id="rankingPanel">
+        <h2 id="rankingTitle"></h2>
+        <div id="rankingList"></div>
       </div>
-      <div id="qaChoices"></div>
-    </div>
-
-    <div id="qaRight">
-      <div id="qaTimerLabel"></div>
-      <div id="qaTimerBig"></div>
-    </div>
-  </div>
-
-  <!-- ランキング/最終結果 -->
-  <div id="overlayRanking">
-    <div id="overlayBox">
-      <div id="overlayTitle"></div>
-      <div id="overlayList"></div>
     </div>
   </div>
 </body>
 </html>
+
 
 
 
