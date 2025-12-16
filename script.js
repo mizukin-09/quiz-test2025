@@ -217,7 +217,7 @@
     stopIndexTimer();
     const tick = () => {
       const remain = deadlineMs - nowMs();
-      const sec = Math.max(0, Math.ceil(remain / 1000));
+      const sec = Math.max(0, Math.floor(remain / 1000));
       waitingArea.style.display = "block";
       waitingArea.textContent = `残り ${sec} 秒`;
 
