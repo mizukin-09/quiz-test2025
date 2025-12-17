@@ -82,18 +82,9 @@
       return { option: v, answeredAtMs: null };
     }
     if (v && typeof v === "object") {
-      // Firestore serverTimestamp(Timestamp) も許容：answeredAt を優先
-      let ms = null;
-      const ts = v.answeredAt;
-      if (ts && typeof ts.toMillis === "function") {
-        ms = ts.toMillis();
-      } else if (typeof v.answeredAtMs === "number") {
-        ms = v.answeredAtMs;
-      }
-
       return {
         option: typeof v.option === "number" ? v.option : null,
-        answeredAtMs: typeof ms === "number" ? ms : null,
+        answeredAtMs: typeof v.answeredAtMs === "number" ? v.answeredAtMs : null,
       };
     }
     return { option: null, answeredAtMs: null };
@@ -321,8 +312,7 @@
         {
           [playerId]: {
             option: opt,
-            answeredAt: (FS.serverTimestamp ? FS.serverTimestamp() : null),
-            answeredAtMs: (FS.serverTimestamp ? null : nowMs()),
+            answeredAtMs: nowMs(),
           },
         },
         { merge: true }
@@ -481,9 +471,9 @@
       const remain = (deadlineMs || 0) - nowMs();
       const sec = Math.max(0, Math.ceil(remain / 1000));
       elTimer.style.display = "block";
-      elTimer.textContent = `${sec}`;
+      elTimer.textContent = `${sec}s`;
       if (remain <= 0) {
-        elTimer.textContent = `0`;
+        elTimer.textContent = `0s`;
         qStopTimer();
       }
     };
@@ -649,8 +639,25 @@
     window.admin_startQuestion = admin_startQuestion;
     window.admin_showVotes = admin_showVotes;
     window.admin_reveal = admin_reveal;
+    // Firestoreの rooms/roomA/questions/{qid}.correct を自動で使う版
+    window.admin_revealAuto = admin_revealAuto;
     window.admin_showRanking = admin_showRanking;
+    window.admin_showRankingAuto = admin_showRankingAuto;
     window.admin_showFinalRanking = admin_showFinalRanking;
+  }
+
+  // 正解番号をFirestoreから自動取得して「正解発表」を行う
+  async function admin_revealAuto(qid) {
+    const q = await fetchQuestion(qid);
+    const correctIndex = typeof q.correct === "number" ? q.correct : 1;
+    return admin_reveal(qid, correctIndex);
+  }
+
+  // 正解番号をFirestoreから自動取得して「正解者ランキング」を表示
+  async function admin_showRankingAuto(qid) {
+    const q = await fetchQuestion(qid);
+    const correctIndex = typeof q.correct === "number" ? q.correct : 1;
+    return admin_showRanking(qid, correctIndex);
   }
 
   async function admin_resetScreen() {
@@ -659,7 +666,6 @@
       currentQuestion: null,
       questionKey: null,
       questionStartMs: null,
-      questionStartAt: null,
       deadlineMs: null,
       votes: null,
       correct: null,
@@ -667,6 +673,7 @@
       finalRanking: null,
       finalKey: null,
     });
+    alert("待機画面に戻しました");
   }
 
   async function admin_showIntro(qid) {
@@ -675,7 +682,6 @@
       currentQuestion: qid,
       questionKey: null,
       questionStartMs: null,
-      questionStartAt: null,
       deadlineMs: null,
       votes: null,
       correct: null,
@@ -683,6 +689,7 @@
       finalRanking: null,
       finalKey: null,
     });
+    alert(`Q${qid} を出題表示（問題だけ）にしました`);
   }
 
   async function admin_startQuestion(qid) {
@@ -695,7 +702,6 @@
       currentQuestion: qid,
       questionKey: qKey,
       questionStartMs: start,
-      questionStartAt: (FS.serverTimestamp ? FS.serverTimestamp() : null),
       deadlineMs: deadline,
       votes: null,
       correct: null,
@@ -707,6 +713,7 @@
     // answers doc を作っておく（なくてもOKだが安定）
     await FS.setDoc(answersRef(qKey), {}, { merge: true });
 
+    alert(`Q${qid} 回答開始（10秒）`);
   }
 
   async function admin_showVotes(qid) {
@@ -734,6 +741,7 @@
       votes: counts,
     });
 
+    alert("投票数を表示しました");
   }
 
   async function admin_reveal(qid, correctIndex) {
@@ -769,15 +777,15 @@
     correctList.sort((a, b) => a.answeredAtMs - b.answeredAtMs);
 
     // 点数加算
-    // - 正解者全員 +1
-    // - 早押し上位3名 +1 追加
-    const bonus = [1, 1, 1];
+    // - 正解者全員 +10
+    // - 早押し上位3名 追加 (1位+5, 2位+3, 3位+1)
+    const bonus = [5, 3, 1];
     const addMap = new Map(); // pid -> add
 
     for (const p of players) addMap.set(p.pid, 0);
 
     for (const c of correctList) {
-      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 1);
+      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 10);
     }
     correctList.slice(0, 3).forEach((c, idx) => {
       addMap.set(c.pid, (addMap.get(c.pid) || 0) + bonus[idx]);
@@ -797,11 +805,12 @@
       correct: correctIndex,
     });
 
+    alert("正解発表（スコア加算）しました");
   }
 
   async function admin_showRanking(qid, correctIndex) {
     const st = await getRoomState();
-    if (!st || st.currentQuestion !== qid || !st.questionKey || !(st.questionStartMs || st.questionStartAt)) {
+    if (!st || st.currentQuestion !== qid || !st.questionKey || !st.questionStartMs) {
       alert("まず同じQの「選択肢表示＆回答開始」を押してください");
       return;
     }
@@ -819,10 +828,7 @@
     for (const p of players) {
       const a = normalizeAnswerValue(ans[p.pid]);
       if (a.option === correctIndex && a.answeredAtMs != null) {
-        const startMs = (st.questionStartAt && typeof st.questionStartAt.toMillis === "function")
-          ? st.questionStartAt.toMillis()
-          : st.questionStartMs;
-        const timeSec = (a.answeredAtMs - startMs) / 1000;
+        const timeSec = (a.answeredAtMs - st.questionStartMs) / 1000;
         correctList.push({ pid: p.pid, name: p.name, timeSec });
       }
     }
@@ -841,6 +847,7 @@
       ranking,
     });
 
+    alert("正解者ランキングを表示しました");
   }
 
   async function admin_showFinalRanking() {
@@ -864,7 +871,6 @@
       currentQuestion: null,
       questionKey: null,
       questionStartMs: null,
-      questionStartAt: null,
       deadlineMs: null,
       votes: null,
       correct: null,
@@ -873,6 +879,7 @@
       finalKey: String(nowMs()), // token
     });
 
+    alert("最終結果ランキングを表示しました");
   }
 
   /* ======================================================

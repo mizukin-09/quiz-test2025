@@ -66,54 +66,25 @@
       </div>
     </div>
 
-    <!-- Q1〜Q10：必要なら増やしてOK -->
+    <!-- 40問対応：問題番号を選んで操作 -->
     <div class="box">
-      <h2>Q1</h2>
-      <div class="row">
-        <button onclick="admin_showIntro(1)">出題（問題だけ）</button>
-        <button onclick="admin_startQuestion(1)">選択肢表示＆回答開始（10秒）</button>
-        <button onclick="admin_showVotes(1)">投票数表示</button>
-        <button onclick="admin_reveal(1, 1)">正解発表（正解=1）</button>
-        <button onclick="admin_showRanking(1, 1)">正解者ランキング</button>
+      <h2>出題コントロール（Q1〜Q40）</h2>
+      <div class="row" style="align-items:center;">
+        <label>問題番号：
+          <input id="qidInput" type="number" min="1" max="40" value="1" style="width:120px;" />
+        </label>
+        <button onclick="qidInput.stepDown();">◀</button>
+        <button onclick="qidInput.stepUp();">▶</button>
       </div>
-      <small>※正解番号はあなたの問題に合わせて変更してください</small>
-    </div>
 
-    <div class="box">
-      <h2>Q2</h2>
-      <div class="row">
-        <button onclick="admin_showIntro(2)">出題（問題だけ）</button>
-        <button onclick="admin_startQuestion(2)">選択肢表示＆回答開始（10秒）</button>
-        <button onclick="admin_showVotes(2)">投票数表示</button>
-        <button onclick="admin_reveal(2, 2)">正解発表（正解=2）</button>
-        <button onclick="admin_showRanking(2, 2)">正解者ランキング</button>
+      <div class="row" style="margin-top:10px;">
+        <button onclick="admin_showIntro(Number(qidInput.value))">出題（問題だけ）</button>
+        <button onclick="admin_startQuestion(Number(qidInput.value))">選択肢表示＆回答開始（10秒）</button>
+        <button onclick="admin_showVotes(Number(qidInput.value))">投票数表示</button>
+        <button onclick="admin_revealAuto(Number(qidInput.value))">正解発表（正解はDBから自動）</button>
+        <button onclick="admin_showRankingAuto(Number(qidInput.value))">正解者ランキング（正解はDBから自動）</button>
       </div>
-    </div>
-
-    <div class="box">
-      <h2>Q3</h2>
-      <div class="row">
-        <button onclick="admin_showIntro(3)">出題（問題だけ）</button>
-        <button onclick="admin_startQuestion(3)">選択肢表示＆回答開始（10秒）</button>
-        <button onclick="admin_showVotes(3)">投票数表示</button>
-        <button onclick="admin_reveal(3, 3)">正解発表（正解=3）</button>
-        <button onclick="admin_showRanking(3, 3)">正解者ランキング</button>
-      </div>
-    </div>
-
-    <div class="box">
-      <h2>Q4</h2>
-      <div class="row">
-        <button onclick="admin_showIntro(4)">出題（問題だけ）</button>
-        <button onclick="admin_startQuestion(4)">選択肢表示＆回答開始（10秒）</button>
-        <button onclick="admin_showVotes(4)">投票数表示</button>
-        <button onclick="admin_reveal(4, 4)">正解発表（正解=4）</button>
-        <button onclick="admin_showRanking(4, 4)">正解者ランキング</button>
-      </div>
-    </div>
-
-    <div class="box"><h2>Q5〜Q10</h2>
-      <p>同じ形式で増やしてOKです（qidだけ変える）</p>
+      <small>※Firestore の rooms/roomA/questions/{qid} の correct を参照します（例：ドキュメントID "1"〜"40"）</small>
     </div>
   </div>
 </body>
