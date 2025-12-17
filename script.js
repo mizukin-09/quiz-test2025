@@ -481,9 +481,9 @@
       const remain = (deadlineMs || 0) - nowMs();
       const sec = Math.max(0, Math.ceil(remain / 1000));
       elTimer.style.display = "block";
-      elTimer.textContent = `${sec}s`;
+      elTimer.textContent = `${sec}`;
       if (remain <= 0) {
-        elTimer.textContent = `0s`;
+        elTimer.textContent = `0`;
         qStopTimer();
       }
     };
@@ -707,7 +707,6 @@
     // answers doc を作っておく（なくてもOKだが安定）
     await FS.setDoc(answersRef(qKey), {}, { merge: true });
 
-    alert(`Q${qid} 回答開始（10秒）`);
   }
 
   async function admin_showVotes(qid) {
