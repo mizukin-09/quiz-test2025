@@ -77,27 +77,18 @@
   }
 
   // answers の中身は { pid: { option, answeredAtMs } } または { pid: number } の両方を許容
-  // answers の中身は { pid: { option, answeredAt, answeredAtMs } } または { pid: number } の両方を許容
-function normalizeAnswerValue(v) {
-  if (typeof v === "number") {
-    return { option: v, answeredAtMs: null };
+  function normalizeAnswerValue(v) {
+    if (typeof v === "number") {
+      return { option: v, answeredAtMs: null };
+    }
+    if (v && typeof v === "object") {
+      return {
+        option: typeof v.option === "number" ? v.option : null,
+        answeredAtMs: typeof v.answeredAtMs === "number" ? v.answeredAtMs : null,
+      };
+    }
+    return { option: null, answeredAtMs: null };
   }
-  if (v && typeof v === "object") {
-    const ts = v.answeredAt;
-    const ms =
-      ts && typeof ts.toMillis === "function"
-        ? ts.toMillis()
-        : typeof v.answeredAtMs === "number"
-        ? v.answeredAtMs
-        : null;
-
-    return {
-      option: typeof v.option === "number" ? v.option : null,
-      answeredAtMs: ms,
-    };
-  }
-  return { option: null, answeredAtMs: null };
-}
 
   async function loadAnswers(qKey) {
     const snap = await FS.getDoc(answersRef(qKey));
@@ -115,9 +106,8 @@ function normalizeAnswerValue(v) {
 
   let idxCurrentQuestionKey = null;
   let idxSelectedOption = null;
+  let idxLocalDeadlineMs = 0; // 端末側で固定する締切（時計ズレ対策）
 
-
-  let idxLocalDeadlineMs = null; // 参加端末側の締切(10秒固定)キャッシュ
   let idxTimerInterval = null;
   let idxUnsubRoom = null;
 
@@ -199,7 +189,6 @@ function normalizeAnswerValue(v) {
       choicesDiv.innerHTML = "";
       idxCurrentQuestionKey = null;
       idxSelectedOption = null;
-      idxLocalDeadlineMs = null;
 
       waitingArea.style.display = "block";
       waitingArea.textContent =
@@ -211,7 +200,6 @@ function normalizeAnswerValue(v) {
     const qid = st.currentQuestion;
     const qKey = st.questionKey; // 重要：毎回ユニーク（過去投票と混ざらない）
     const deadlineMs = st.deadlineMs || 0;
-    const effectiveDeadlineMs = idxLocalDeadlineMs || deadlineMs;
 
     if (!qid || !qKey) {
       waitingArea.style.display = "block";
@@ -223,31 +211,29 @@ function normalizeAnswerValue(v) {
     if (qKey !== idxCurrentQuestionKey) {
       idxCurrentQuestionKey = qKey;
       idxSelectedOption = null;
-      // 参加者端末では「表示された瞬間から10秒」で締切を作る（端末時刻ズレ対策）
-      idxLocalDeadlineMs = nowMs() + ANSWER_DURATION_MS;
       await renderIndexChoices(qid);
-    } else if (!idxLocalDeadlineMs) {
-      // 念のため
-      idxLocalDeadlineMs = nowMs() + ANSWER_DURATION_MS;
+      // 端末側の締切を固定（時計ズレ対策）
+      idxLocalDeadlineMs = Date.now() + ANSWER_DURATION_MS;
     }
 
     // タイマー（残り表示＋自動投票不可）
     stopIndexTimer();
     const tick = () => {
-      const remain = effectiveDeadlineMs - nowMs();
+      // idxLocalDeadlineMs を基準に表示（端末時計ズレで12秒になったり押せなくなるのを防ぐ）
+      const remain = idxLocalDeadlineMs - Date.now();
       const sec = Math.max(0, Math.floor((remain + 999) / 1000));
       waitingArea.style.display = "block";
       waitingArea.textContent = `残り ${sec} 秒`;
 
       if (remain <= 0) {
-        disableIndexChoices("時間切れです");
+        disableIndexChoices();
       }
     };
     tick();
     idxTimerInterval = setInterval(tick, 200);
 
     // 時間内なら押せる（ただし既に回答済みなら押せない）
-    if (nowMs() < effectiveDeadlineMs && idxSelectedOption == null) {
+    if (Date.now() < idxLocalDeadlineMs && idxSelectedOption == null) {
       enableIndexChoices();
     } else {
       disableIndexChoices();
@@ -309,9 +295,9 @@ function normalizeAnswerValue(v) {
     }
     if (!idxState || idxState.phase !== "question") return;
 
-    const deadlineMs = idxState.deadlineMs || 0;
-    const localDeadlineMs = idxLocalDeadlineMs || deadlineMs;
-    if (Date.now() >= localDeadlineMs) {
+    // 端末側締切を優先（時計ズレ対策）
+    const deadlineMs = idxLocalDeadlineMs || (idxState.deadlineMs || 0);
+    if (Date.now() >= deadlineMs) {
       disableIndexChoices();
       return;
     }
@@ -331,7 +317,6 @@ function normalizeAnswerValue(v) {
         {
           [playerId]: {
             option: opt,
-            answeredAt: FS.serverTimestamp(),
             answeredAtMs: nowMs(),
           },
         },
@@ -661,11 +646,6 @@ function normalizeAnswerValue(v) {
     window.admin_reveal = admin_reveal;
     window.admin_showRanking = admin_showRanking;
     window.admin_showFinalRanking = admin_showFinalRanking;
-
-
-    // admin.html のボタン互換（Auto版）
-    window.admin_revealAuto = (qid) => admin_reveal(qid, undefined);
-    window.admin_showRankingAuto = (qid) => admin_showRanking(qid, undefined);
   }
 
   async function admin_resetScreen() {
@@ -674,7 +654,6 @@ function normalizeAnswerValue(v) {
       currentQuestion: null,
       questionKey: null,
       questionStartMs: null,
-      questionStartAt: null,
       deadlineMs: null,
       votes: null,
       correct: null,
@@ -691,7 +670,6 @@ function normalizeAnswerValue(v) {
       currentQuestion: qid,
       questionKey: null,
       questionStartMs: null,
-      questionStartAt: null,
       deadlineMs: null,
       votes: null,
       correct: null,
@@ -712,7 +690,6 @@ function normalizeAnswerValue(v) {
       currentQuestion: qid,
       questionKey: qKey,
       questionStartMs: start,
-      questionStartAt: FS.serverTimestamp(),
       deadlineMs: deadline,
       votes: null,
       correct: null,
@@ -729,7 +706,7 @@ function normalizeAnswerValue(v) {
 
   async function admin_showVotes(qid) {
     const st = await getRoomState();
-    if (!st || String(st.currentQuestion) !== String(qid) || !st.questionKey) {
+    if (!st || st.currentQuestion !== qid || !st.questionKey) {
       alert("まず同じQの「選択肢表示＆回答開始」を押してください（questionKeyがありません）");
       return;
     }
@@ -757,19 +734,12 @@ function normalizeAnswerValue(v) {
 
   async function admin_reveal(qid, correctIndex) {
     const st = await getRoomState();
-    if (!st || String(st.currentQuestion) !== String(qid) || !st.questionKey) {
+    if (!st || st.currentQuestion !== qid || !st.questionKey) {
       alert("まず同じQの「選択肢表示＆回答開始」を押してください");
       return;
     }
 
-    
-// correctIndex が未指定/不正なら、questions テーブルの correct を使う
-if (typeof correctIndex !== "number" || !Number.isFinite(correctIndex)) {
-  const qdoc = await fetchQuestion(qid);
-  correctIndex = typeof qdoc.correct === "number" ? qdoc.correct : 1;
-}
-
-// 回答を読む
+    // 回答を読む
     const ans = await loadAnswers(st.questionKey);
 
     // プレイヤーを読む
@@ -797,55 +767,48 @@ if (typeof correctIndex !== "number" || !Number.isFinite(correctIndex)) {
     // 点数加算
     // - 正解者全員 +10
     // - 早押し上位3名 追加 (1位+5, 2位+3, 3位+1)
-    const bonus = [1, 1, 1];
+    const bonus = [5, 3, 1];
     const addMap = new Map(); // pid -> add
 
     for (const p of players) addMap.set(p.pid, 0);
 
     for (const c of correctList) {
-      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 1);
+      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 10);
     }
     correctList.slice(0, 3).forEach((c, idx) => {
       addMap.set(c.pid, (addMap.get(c.pid) || 0) + bonus[idx]);
     });
 
-    
-  // 先に画面共有を「正解発表」へ切り替える（スコア更新失敗で表示が止まらないように）
-  await setRoomState({
-    ...st,
-    phase: "result",
-    correct: correctIndex,
-  });
-
-  // スコア更新（失敗しても表示は継続）
-  try {
-    for (const p of players) {
-      const add = addMap.get(p.pid) || 0;
-      if (add !== 0) {
-        await FS.updateDoc(playerRef(p.pid), { score: (p.score || 0) + add });
+    // 更新（失敗しても画面は進める：表示優先）
+    try {
+      for (const p of players) {
+        const add = addMap.get(p.pid) || 0;
+        if (add !== 0) {
+          await FS.updateDoc(playerRef(p.pid), { score: (p.score || 0) + add });
+        }
       }
+    } catch (e) {
+      console.error("score update failed:", e);
     }
-    console.log("正解発表（スコア加算）しました");
-  } catch (e) {
-    console.error("スコア更新に失敗しました（表示は継続します）", e);
+
+    await setRoomState({
+      ...st,
+      phase: "result",
+      correct: correctIndex,
+    });
+
+    alert("正解発表（スコア加算）しました");
   }
-}
 
   async function admin_showRanking(qid, correctIndex) {
     const st = await getRoomState();
-    if (!st || String(st.currentQuestion) !== String(qid) || !st.questionKey || !st.questionStartMs) {
+    if (!st || st.currentQuestion !== qid || !st.questionKey || !st.questionStartMs) {
       alert("まず同じQの「選択肢表示＆回答開始」を押してください");
       return;
     }
 
-    
-// correctIndex が未指定/不正なら、questions テーブルの correct を使う
-if (typeof correctIndex !== "number" || !Number.isFinite(correctIndex)) {
-  const qdoc = await fetchQuestion(qid);
-  correctIndex = typeof qdoc.correct === "number" ? qdoc.correct : 1;
-}
-
-const ans = await loadAnswers(st.questionKey);
+    try {
+    const ans = await loadAnswers(st.questionKey);
 
     const psnap = await FS.getDocs(playersCol());
     const players = [];
@@ -854,22 +817,11 @@ const ans = await loadAnswers(st.questionKey);
       players.push({ pid: d.id, name: p.name || d.id });
     });
 
-    
-const startAdminMs = st.questionStartMs;
-const startServerMs =
-  st.questionStartAt && typeof st.questionStartAt.toMillis === "function"
-    ? st.questionStartAt.toMillis()
-    : null;
-
-const correctList = [];
+    const correctList = [];
     for (const p of players) {
       const a = normalizeAnswerValue(ans[p.pid]);
       if (a.option === correctIndex && a.answeredAtMs != null) {
-        const raw = ans[p.pid];
-const answeredIsServer =
-  raw && typeof raw === "object" && raw.answeredAt && typeof raw.answeredAt.toMillis === "function";
-const baseStartMs = answeredIsServer && startServerMs != null ? startServerMs : startAdminMs;
-const timeSec = (a.answeredAtMs - baseStartMs) / 1000;
+        const timeSec = (a.answeredAtMs - st.questionStartMs) / 1000;
         correctList.push({ pid: p.pid, name: p.name, timeSec });
       }
     }
@@ -888,7 +840,16 @@ const timeSec = (a.answeredAtMs - baseStartMs) / 1000;
       ranking,
     });
 
-    console.log("正解者ランキングを表示しました");
+    alert("正解者ランキングを表示しました");    } catch (e) {
+      console.error("ranking build failed:", e);
+      await setRoomState({
+        ...st,
+        phase: "ranking",
+        correct: correctIndex,
+        ranking: [],
+      });
+    }
+
   }
 
   async function admin_showFinalRanking() {
@@ -912,7 +873,6 @@ const timeSec = (a.answeredAtMs - baseStartMs) / 1000;
       currentQuestion: null,
       questionKey: null,
       questionStartMs: null,
-      questionStartAt: null,
       deadlineMs: null,
       votes: null,
       correct: null,
