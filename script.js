@@ -797,13 +797,13 @@ if (typeof correctIndex !== "number" || !Number.isFinite(correctIndex)) {
     // 点数加算
     // - 正解者全員 +10
     // - 早押し上位3名 追加 (1位+5, 2位+3, 3位+1)
-    const bonus = [5, 3, 1];
+    const bonus = [1, 1, 1];
     const addMap = new Map(); // pid -> add
 
     for (const p of players) addMap.set(p.pid, 0);
 
     for (const c of correctList) {
-      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 10);
+      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 1);
     }
     correctList.slice(0, 3).forEach((c, idx) => {
       addMap.set(c.pid, (addMap.get(c.pid) || 0) + bonus[idx]);
