@@ -78,18 +78,23 @@
 
   // answers の中身は { pid: { option, answeredAtMs } } または { pid: number } の両方を許容
   function normalizeAnswerValue(v) {
-    // answers の中身は { pid: { option, answeredAtMs, answeredInMs } } または { pid: number } を許容
     if (typeof v === "number") {
-      return { option: v, answeredAtMs: null, answeredInMs: null };
+      return { option: v, answeredAtMs: null };
     }
     if (v && typeof v === "object") {
+      const ts = v.answeredAt;
+      const ms =
+        ts && typeof ts.toMillis === "function"
+          ? ts.toMillis()
+          : typeof v.answeredAtMs === "number"
+          ? v.answeredAtMs
+          : null;
       return {
         option: typeof v.option === "number" ? v.option : null,
-        answeredAtMs: typeof v.answeredAtMs === "number" ? v.answeredAtMs : null,
-        answeredInMs: typeof v.answeredInMs === "number" ? v.answeredInMs : null, // 開始からの経過ms（端末時刻ズレ対策）
+        answeredAtMs: ms,
       };
     }
-    return { option: null, answeredAtMs: null, answeredInMs: null };
+    return { option: null, answeredAtMs: null };
   }
 
   async function loadAnswers(qKey) {
@@ -108,15 +113,11 @@
 
   let idxCurrentQuestionKey = null;
   let idxSelectedOption = null;
-
+  let idxLocalDeadlineMs = 0; // 端末時計ズレ対策：表示はローカル10秒固定
 
   let idxTimerInterval = null;
   let idxUnsubRoom = null;
 
-
-  // 参加者側で「見えた瞬間から10秒」にする（端末時刻ズレ対策）
-  let idxLocalStartMs = null;
-  let idxLocalDeadlineMs = null;
   function initIndexPage() {
     const joinArea = document.getElementById("joinArea");
     if (!joinArea) return;
@@ -217,37 +218,33 @@
     if (qKey !== idxCurrentQuestionKey) {
       idxCurrentQuestionKey = qKey;
       idxSelectedOption = null;
-        idxLocalStartMs = null;
-        idxLocalDeadlineMs = null;
-        await renderIndexChoices(qid);
+      idxLocalDeadlineMs = Date.now() + ANSWER_DURATION_MS; // 表示開始から10秒
+      await renderIndexChoices(qid);
     }
 
     // タイマー（残り表示＋自動投票不可）
-    stopIndexTimer();
-        // 端末時計ズレの影響を避けるため、参加者側は「見えた瞬間から10秒」で固定
-        if (!idxLocalStartMs || !idxLocalDeadlineMs) {
-          idxLocalStartMs = nowMs();
-          idxLocalDeadlineMs = idxLocalStartMs + ANSWER_DURATION_MS;
-        }
-    const tick = () => {
-      const remain = (idxLocalDeadlineMs || 0) - nowMs();
-          const sec = Math.max(0, Math.floor(remain / 1000));
-      waitingArea.style.display = "block";
-      waitingArea.textContent = `残り ${sec} 秒`;
+// 端末の時計ズレで 12秒表示になるのを防ぐため、参加者側は「この問題が表示された瞬間から10秒」で固定
+stopIndexTimer();
+const baseDeadlineMs = idxLocalDeadlineMs || 0;
+const tick = () => {
+  const remain = baseDeadlineMs - Date.now();
+  const sec = Math.max(0, Math.floor((remain + 999) / 1000)); // 10→…→0 になりやすい
+  waitingArea.style.display = "block";
+  waitingArea.textContent = `残り ${sec} 秒`;
 
-      if (remain <= 0) {
-        disableIndexChoices("時間切れです");
-      }
-    };
-    tick();
-    idxTimerInterval = setInterval(tick, 200);
+  if (remain <= 0) {
+    disableIndexChoices("時間切れです");
+  }
+};
+tick();
+idxTimerInterval = setInterval(tick, 200);
 
-    // 時間内なら押せる（ただし既に回答済みなら押せない）
-    if (nowMs() < (idxLocalDeadlineMs || 0) && idxSelectedOption == null) {
-      enableIndexChoices();
-    } else {
-      disableIndexChoices();
-    }
+// 時間内なら押せる（ただし既に回答済みなら押せない）
+if (Date.now() < baseDeadlineMs && idxSelectedOption == null) {
+  enableIndexChoices();
+} else {
+  disableIndexChoices();
+}
   }
 
   async function renderIndexChoices(qid) {
@@ -305,8 +302,8 @@
     }
     if (!idxState || idxState.phase !== "question") return;
 
-    const effectiveDeadlineMs = idxLocalDeadlineMs || (idxState.deadlineMs || 0);
-    if (nowMs() >= effectiveDeadlineMs) {
+    const deadlineMs = idxState.deadlineMs || 0;
+    if (nowMs() >= deadlineMs) {
       disableIndexChoices();
       return;
     }
@@ -326,8 +323,8 @@
         {
           [playerId]: {
             option: opt,
+            answeredAt: FS.serverTimestamp(),
             answeredAtMs: nowMs(),
-            answeredInMs: typeof idxLocalStartMs === "number" ? Math.max(0, nowMs() - idxLocalStartMs) : null,
           },
         },
         { merge: true }
@@ -355,11 +352,13 @@
 
   function qHideAll() {
     const elProblem = document.getElementById("problemBox");
+    const elIntro = document.getElementById("introFrameWrap");
     const elTimerBox = document.getElementById("timerBox");
     const elChoices = document.getElementById("screenChoices");
     const elRanking = document.getElementById("screenRanking");
 
     elProblem.style.display = "none";
+    if (elIntro) elIntro.style.display = "none";
     elTimerBox.style.display = "none";
     elChoices.style.display = "none";
     elRanking.style.display = "none";
@@ -395,6 +394,15 @@
 
     if (phase === "intro") {
       // 出題画面（問題だけ）
+      if (st.introUrl) {
+        const wrap = document.getElementById("introFrameWrap");
+        const frame = document.getElementById("introFrame");
+        if (wrap && frame) {
+          if (frame.getAttribute("src") !== st.introUrl) frame.setAttribute("src", st.introUrl);
+          wrap.style.display = "block";
+          return;
+        }
+      }
       await qRenderProblemOnly(st.currentQuestion);
       return;
     }
@@ -671,14 +679,27 @@
       finalRanking: null,
       finalKey: null,
     });
+    console.log("待機画面に戻しました");
   }
 
   async function admin_showIntro(qid) {
+    // 画面共有（question.html）側に「出題（問題だけ）」を表示させる
+    // 任意のページを出したい場合は admin.html の <head> などで
+    // window.ADMIN_INTRO_URL_TEMPLATE = "./intro.html?q={qid}";
+    // のように設定してください（{qid} が問題番号に置換されます）
+    const tpl = window.ADMIN_INTRO_URL_TEMPLATE;
+    let introUrl = null;
+    if (typeof tpl === "string" && tpl.trim()) {
+      introUrl = tpl.includes("{qid}") ? tpl.split("{qid}").join(String(qid)) : tpl.trim();
+    }
+
     await setRoomState({
       phase: "intro",
       currentQuestion: qid,
+      introUrl,
       questionKey: null,
       questionStartMs: null,
+      questionStartAt: null,
       deadlineMs: null,
       votes: null,
       correct: null,
@@ -688,6 +709,7 @@
     });
   }
 
+
   async function admin_startQuestion(qid) {
     const start = nowMs();
     const qKey = `${qid}_${start}`; // 毎回ユニーク（過去投票と混ざらない）
@@ -696,8 +718,10 @@
     await setRoomState({
       phase: "question",
       currentQuestion: qid,
+      introUrl: null,
       questionKey: qKey,
       questionStartMs: start,
+      questionStartAt: FS.serverTimestamp(),
       deadlineMs: deadline,
       votes: null,
       correct: null,
@@ -709,12 +733,13 @@
     // answers doc を作っておく（なくてもOKだが安定）
     await FS.setDoc(answersRef(qKey), {}, { merge: true });
 
+    console.log(`Q${qid} 回答開始（10秒）`);
   }
 
   async function admin_showVotes(qid) {
     const st = await getRoomState();
     if (!st || st.currentQuestion !== qid || !st.questionKey) {
-      alert("まず同じQの「選択肢表示＆回答開始」を押してください（questionKeyがありません）");
+      console.log("まず同じQの「選択肢表示＆回答開始」を押してください（questionKeyがありません）");
       return;
     }
 
@@ -735,12 +760,14 @@
       phase: "votes",
       votes: counts,
     });
+
+    console.log("投票数を表示しました");
   }
 
   async function admin_reveal(qid, correctIndex) {
     const st = await getRoomState();
     if (!st || st.currentQuestion !== qid || !st.questionKey) {
-      alert("まず同じQの「選択肢表示＆回答開始」を押してください");
+      console.log("まず同じQの「選択肢表示＆回答開始」を押してください");
       return;
     }
 
@@ -764,25 +791,21 @@
           pid: p.pid,
           name: p.name,
           answeredAtMs: a.answeredAtMs,
-          answeredInMs: a.answeredInMs,
         });
       }
     }
-        correctList.sort((a, b) => {
-      const ak = typeof a.answeredInMs === "number" ? a.answeredInMs : a.answeredAtMs;
-      const bk = typeof b.answeredInMs === "number" ? b.answeredInMs : b.answeredAtMs;
-      return (ak ?? 1e18) - (bk ?? 1e18);
-    });
+    correctList.sort((a, b) => a.answeredAtMs - b.answeredAtMs);
+
     // 点数加算
     // - 正解者全員 +10
     // - 早押し上位3名 追加 (1位+5, 2位+3, 3位+1)
-    const bonus = [1, 1, 1];
+    const bonus = [5, 3, 1];
     const addMap = new Map(); // pid -> add
 
     for (const p of players) addMap.set(p.pid, 0);
 
     for (const c of correctList) {
-      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 1);
+      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 10);
     }
     correctList.slice(0, 3).forEach((c, idx) => {
       addMap.set(c.pid, (addMap.get(c.pid) || 0) + bonus[idx]);
@@ -802,12 +825,13 @@
       correct: correctIndex,
     });
 
+    console.log("正解発表（スコア加算）しました");
   }
 
   async function admin_showRanking(qid, correctIndex) {
     const st = await getRoomState();
     if (!st || st.currentQuestion !== qid || !st.questionKey || !st.questionStartMs) {
-      alert("まず同じQの「選択肢表示＆回答開始」を押してください");
+      console.log("まず同じQの「選択肢表示＆回答開始」を押してください");
       return;
     }
 
@@ -820,17 +844,16 @@
       players.push({ pid: d.id, name: p.name || d.id });
     });
 
+    const startMs =
+      st.questionStartAt && typeof st.questionStartAt.toMillis === "function"
+        ? st.questionStartAt.toMillis()
+        : st.questionStartMs;
+
     const correctList = [];
     for (const p of players) {
       const a = normalizeAnswerValue(ans[p.pid]);
       if (a.option === correctIndex && a.answeredAtMs != null) {
-        let timeSec = null;
-        if (typeof a.answeredInMs === "number") {
-          timeSec = a.answeredInMs / 1000;
-        } else if (typeof a.answeredAtMs === "number" && typeof st.questionStartMs === "number") {
-          timeSec = (a.answeredAtMs - st.questionStartMs) / 1000;
-        }
-        if (timeSec == null || !isFinite(timeSec) || timeSec < 0) continue;
+        const timeSec = (a.answeredAtMs - startMs) / 1000;
         correctList.push({ pid: p.pid, name: p.name, timeSec });
       }
     }
@@ -849,6 +872,7 @@
       ranking,
     });
 
+    console.log("正解者ランキングを表示しました");
   }
 
   async function admin_showFinalRanking() {
@@ -880,6 +904,7 @@
       finalKey: String(nowMs()), // token
     });
 
+    console.log("最終結果ランキングを表示しました");
   }
 
   /* ======================================================
