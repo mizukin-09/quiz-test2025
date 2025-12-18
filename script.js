@@ -116,6 +116,8 @@ function normalizeAnswerValue(v) {
   let idxCurrentQuestionKey = null;
   let idxSelectedOption = null;
 
+
+  let idxLocalDeadlineMs = null; // 参加端末側の締切(10秒固定)キャッシュ
   let idxTimerInterval = null;
   let idxUnsubRoom = null;
 
@@ -197,6 +199,7 @@ function normalizeAnswerValue(v) {
       choicesDiv.innerHTML = "";
       idxCurrentQuestionKey = null;
       idxSelectedOption = null;
+      idxLocalDeadlineMs = null;
 
       waitingArea.style.display = "block";
       waitingArea.textContent =
@@ -208,6 +211,7 @@ function normalizeAnswerValue(v) {
     const qid = st.currentQuestion;
     const qKey = st.questionKey; // 重要：毎回ユニーク（過去投票と混ざらない）
     const deadlineMs = st.deadlineMs || 0;
+    const effectiveDeadlineMs = idxLocalDeadlineMs || deadlineMs;
 
     if (!qid || !qKey) {
       waitingArea.style.display = "block";
@@ -219,14 +223,19 @@ function normalizeAnswerValue(v) {
     if (qKey !== idxCurrentQuestionKey) {
       idxCurrentQuestionKey = qKey;
       idxSelectedOption = null;
+      // 参加者端末では「表示された瞬間から10秒」で締切を作る（端末時刻ズレ対策）
+      idxLocalDeadlineMs = nowMs() + ANSWER_DURATION_MS;
       await renderIndexChoices(qid);
+    } else if (!idxLocalDeadlineMs) {
+      // 念のため
+      idxLocalDeadlineMs = nowMs() + ANSWER_DURATION_MS;
     }
 
     // タイマー（残り表示＋自動投票不可）
     stopIndexTimer();
     const tick = () => {
-      const remain = deadlineMs - nowMs();
-      const sec = Math.max(0, Math.floor(remain / 1000));
+      const remain = effectiveDeadlineMs - nowMs();
+      const sec = Math.max(0, Math.floor((remain + 999) / 1000));
       waitingArea.style.display = "block";
       waitingArea.textContent = `残り ${sec} 秒`;
 
@@ -238,7 +247,7 @@ function normalizeAnswerValue(v) {
     idxTimerInterval = setInterval(tick, 200);
 
     // 時間内なら押せる（ただし既に回答済みなら押せない）
-    if (nowMs() < deadlineMs && idxSelectedOption == null) {
+    if (nowMs() < effectiveDeadlineMs && idxSelectedOption == null) {
       enableIndexChoices();
     } else {
       disableIndexChoices();
@@ -652,6 +661,11 @@ function normalizeAnswerValue(v) {
     window.admin_reveal = admin_reveal;
     window.admin_showRanking = admin_showRanking;
     window.admin_showFinalRanking = admin_showFinalRanking;
+
+
+    // admin.html のボタン互換（Auto版）
+    window.admin_revealAuto = (qid) => admin_reveal(qid, undefined);
+    window.admin_showRankingAuto = (qid) => admin_showRanking(qid, undefined);
   }
 
   async function admin_resetScreen() {
