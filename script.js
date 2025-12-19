@@ -644,7 +644,9 @@
     window.admin_startQuestion = admin_startQuestion;
     window.admin_showVotes = admin_showVotes;
     window.admin_reveal = admin_reveal;
+    window.admin_revealAuto = admin_revealAuto;
     window.admin_showRanking = admin_showRanking;
+    window.admin_showRankingAuto = admin_showRankingAuto;
     window.admin_showFinalRanking = admin_showFinalRanking;
   }
 
@@ -800,7 +802,22 @@
     alert("正解発表（スコア加算）しました");
   }
 
-  async function admin_showRanking(qid, correctIndex) {
+  
+  // correct をDBから取得して実行（管理画面のボタン用）
+  async function admin_revealAuto(qid) {
+    const q = await fetchQuestion(qid);
+    const correctIndex = typeof q.correct === "number" ? q.correct : 1;
+    return admin_reveal(qid, correctIndex);
+  }
+
+  // correct をDBから取得して「正解者ランキング」を表示（管理画面のボタン用）
+  async function admin_showRankingAuto(qid) {
+    const q = await fetchQuestion(qid);
+    const correctIndex = typeof q.correct === "number" ? q.correct : 1;
+    return admin_showRanking(qid, correctIndex);
+  }
+
+async function admin_showRanking(qid, correctIndex) {
     const st = await getRoomState();
     if (!st || st.currentQuestion !== qid || !st.questionKey || !st.questionStartMs) {
       alert("まず同じQの「選択肢表示＆回答開始」を押してください");
