@@ -23,10 +23,6 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const nowMs = () => Date.now();
 
-  // 参加ボタンが Firebase 初期化前に押されてもエラーにならないよう、先にグローバルへ公開
-  // （FS が未準備なら joinGame() 内で案内する）
-  window.joinGame = (...args) => joinGame(...args);
-
   function makeId(len = 12) {
     const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
     let s = "";
@@ -110,7 +106,6 @@
 
   let idxCurrentQuestionKey = null;
   let idxSelectedOption = null;
-  let idxLocalDeadlineMs = 0; // 端末側で固定する締切（時計ズレ対策）
 
   let idxTimerInterval = null;
   let idxUnsubRoom = null;
@@ -216,28 +211,25 @@
       idxCurrentQuestionKey = qKey;
       idxSelectedOption = null;
       await renderIndexChoices(qid);
-      // 端末側の締切を固定（時計ズレ対策）
-      idxLocalDeadlineMs = Date.now() + ANSWER_DURATION_MS;
     }
 
     // タイマー（残り表示＋自動投票不可）
     stopIndexTimer();
     const tick = () => {
-      // idxLocalDeadlineMs を基準に表示（端末時計ズレで12秒になったり押せなくなるのを防ぐ）
-      const remain = idxLocalDeadlineMs - Date.now();
-      const sec = Math.max(0, Math.floor((remain + 999) / 1000));
+      const remain = deadlineMs - nowMs();
+      const sec = Math.max(0, Math.floor(remain / 1000));
       waitingArea.style.display = "block";
       waitingArea.textContent = `残り ${sec} 秒`;
 
       if (remain <= 0) {
-        disableIndexChoices();
+        disableIndexChoices("時間切れです");
       }
     };
     tick();
     idxTimerInterval = setInterval(tick, 200);
 
     // 時間内なら押せる（ただし既に回答済みなら押せない）
-    if (Date.now() < idxLocalDeadlineMs && idxSelectedOption == null) {
+    if (nowMs() < deadlineMs && idxSelectedOption == null) {
       enableIndexChoices();
     } else {
       disableIndexChoices();
@@ -299,9 +291,8 @@
     }
     if (!idxState || idxState.phase !== "question") return;
 
-    // 端末側締切を優先（時計ズレ対策）
-    const deadlineMs = idxLocalDeadlineMs || (idxState.deadlineMs || 0);
-    if (Date.now() >= deadlineMs) {
+    const deadlineMs = idxState.deadlineMs || 0;
+    if (nowMs() >= deadlineMs) {
       disableIndexChoices();
       return;
     }
@@ -574,13 +565,20 @@
 
   async function qRenderRanking(rankingArr, title, token) {
     // rankingArr: [{rank, name, timeSec}]
-    const key = token + ":" + JSON.stringify(rankingArr || []);
-    if (qLastToken === key) return;
-    qLastToken = key;
-
     const elRanking = document.getElementById("screenRanking");
     const elTitle = document.getElementById("rankingTitle");
     const elList = document.getElementById("rankingList");
+
+    const key = token + ":" + JSON.stringify(rankingArr || []);
+
+    // onSnapshot が複数回発火しても、表示が消えないようにする
+    if (qLastToken === key) {
+      elRanking.style.display = "flex";
+      // タイトルだけは念のため毎回セット
+      elTitle.textContent = title;
+      return;
+    }
+    qLastToken = key;
 
     elRanking.style.display = "flex";
     elTitle.textContent = title;
@@ -605,14 +603,21 @@
     }, 600);
   }
 
-  async function qRenderFinal(finalArr, title, token) {
-    const key = token + ":" + JSON.stringify(finalArr || []);
-    if (qLastToken === key) return;
-    qLastToken = key;
 
+  async function qRenderFinal(finalArr, title, token) {
     const elRanking = document.getElementById("screenRanking");
     const elTitle = document.getElementById("rankingTitle");
     const elList = document.getElementById("rankingList");
+
+    const key = token + ":" + JSON.stringify(finalArr || []);
+
+    // onSnapshot が複数回発火しても、表示が消えないようにする
+    if (qLastToken === key) {
+      elRanking.style.display = "flex";
+      elTitle.textContent = title;
+      return;
+    }
+    qLastToken = key;
 
     elRanking.style.display = "flex";
     elTitle.textContent = title;
@@ -637,6 +642,7 @@
     }, 450);
   }
 
+
   /* ======================================================
      ADMIN（管理）
   ====================================================== */
@@ -649,8 +655,6 @@
     window.admin_showVotes = admin_showVotes;
     window.admin_reveal = admin_reveal;
     window.admin_showRanking = admin_showRanking;
-    window.admin_revealAuto = admin_revealAuto;
-    window.admin_showRankingAuto = admin_showRankingAuto;
     window.admin_showFinalRanking = admin_showFinalRanking;
   }
 
@@ -738,21 +742,6 @@
     alert("投票数を表示しました");
   }
 
-
-  // DBの questions/{qid}.correct を読んでから正解発表する（admin.html用）
-  async function admin_revealAuto(qid) {
-    const q = await fetchQuestion(qid);
-    const correctIndex = typeof q.correct === "number" ? q.correct : 1;
-    return admin_reveal(qid, correctIndex);
-  }
-
-  // DBの questions/{qid}.correct を読んでからランキング表示する（admin.html用）
-  async function admin_showRankingAuto(qid) {
-    const q = await fetchQuestion(qid);
-    const correctIndex = typeof q.correct === "number" ? q.correct : 1;
-    return admin_showRanking(qid, correctIndex);
-  }
-
   async function admin_reveal(qid, correctIndex) {
     const st = await getRoomState();
     if (!st || st.currentQuestion !== qid || !st.questionKey) {
@@ -760,117 +749,151 @@
       return;
     }
 
-    // 回答を読む
-    const ans = await loadAnswers(st.questionKey);
-
-    // プレイヤーを読む
-    const psnap = await FS.getDocs(playersCol());
-    const players = [];
-    psnap.forEach((d) => {
-      const p = d.data() || {};
-      players.push({ pid: d.id, name: p.name || d.id, score: p.score || 0 });
-    });
-
-    // 正解者＋タイム
-    const correctList = [];
-    for (const p of players) {
-      const a = normalizeAnswerValue(ans[p.pid]);
-      if (a.option === correctIndex && a.answeredAtMs != null) {
-        correctList.push({
-          pid: p.pid,
-          name: p.name,
-          answeredAtMs: a.answeredAtMs,
-        });
-      }
-    }
-    correctList.sort((a, b) => a.answeredAtMs - b.answeredAtMs);
-
-    // 点数加算
-    // - 正解者全員 +10
-    // - 早押し上位3名 追加 (1位+5, 2位+3, 3位+1)
-    const bonus = [5, 3, 1];
-    const addMap = new Map(); // pid -> add
-
-    for (const p of players) addMap.set(p.pid, 0);
-
-    for (const c of correctList) {
-      addMap.set(c.pid, (addMap.get(c.pid) || 0) + 10);
-    }
-    correctList.slice(0, 3).forEach((c, idx) => {
-      addMap.set(c.pid, (addMap.get(c.pid) || 0) + bonus[idx]);
-    });
-
-    // 更新（失敗しても画面は進める：表示優先）
+    // まずは「正解表示」を最優先（途中で失敗しても phase は進める）
     try {
-      for (const p of players) {
-        const add = addMap.get(p.pid) || 0;
-        if (add !== 0) {
-          await FS.updateDoc(playerRef(p.pid), { score: (p.score || 0) + add });
+      // 回答を読む（失敗すると正解者計算や加点ができないので catch へ）
+      const ans = await loadAnswers(st.questionKey);
+
+      // プレイヤー一覧（読めなくてもOK：読めた時だけ加点と名前表示に使う）
+      let players = [];
+      try {
+        const psnap = await FS.getDocs(playersCol());
+        psnap.forEach((d) => {
+          const p = d.data() || {};
+          players.push({ pid: d.id, name: p.name || d.id, score: p.score || 0 });
+        });
+      } catch (e) {
+        console.warn("players read failed (continue without scoring):", e);
+      }
+
+      // 正解者＋タイム（players が取れた場合は players を、取れない場合は answers の pid を使う）
+      const correctList = [];
+
+      if (players.length > 0) {
+        for (const p of players) {
+          const a = normalizeAnswerValue(ans[p.pid]);
+          if (a.option === correctIndex && a.answeredAtMs != null) {
+            correctList.push({ pid: p.pid, name: p.name, answeredAtMs: a.answeredAtMs });
+          }
+        }
+      } else {
+        for (const pid in ans) {
+          const a = normalizeAnswerValue(ans[pid]);
+          if (a.option === correctIndex && a.answeredAtMs != null) {
+            correctList.push({ pid, name: pid, answeredAtMs: a.answeredAtMs });
+          }
+        }
+      }
+
+      correctList.sort((a, b) => a.answeredAtMs - b.answeredAtMs);
+
+      // 点数加算（players が読めた時だけ実施）
+      if (players.length > 0) {
+        // 正解者全員 +10（※あなたの現行仕様を維持）
+        // 早押し上位3名ボーナス（現行のまま：5/3/1）
+        const bonus = [5, 3, 1];
+        const addMap = new Map(); // pid -> add
+        for (const p of players) addMap.set(p.pid, 0);
+
+        for (const c of correctList) {
+          addMap.set(c.pid, (addMap.get(c.pid) || 0) + 10);
+        }
+        correctList.slice(0, 3).forEach((c, idx) => {
+          addMap.set(c.pid, (addMap.get(c.pid) || 0) + bonus[idx]);
+        });
+
+        try {
+          for (const p of players) {
+            const add = addMap.get(p.pid) || 0;
+            if (add !== 0) {
+              await FS.updateDoc(playerRef(p.pid), { score: (p.score || 0) + add });
+            }
+          }
+        } catch (e) {
+          console.warn("score update failed (continue):", e);
         }
       }
     } catch (e) {
-      console.error("score update failed:", e);
+      console.error("admin_reveal failed (will still show result):", e);
     }
 
+    // ここは必ず実行して、画面共有側を「正解発表」に切り替える
     await setRoomState({
       ...st,
       phase: "result",
       correct: correctIndex,
     });
 
-    alert("正解発表（スコア加算）しました");
+    // alert は残す（必要なら後で消せます）
+    alert("正解発表しました");
   }
 
   async function admin_showRanking(qid, correctIndex) {
     const st = await getRoomState();
-    if (!st || st.currentQuestion !== qid || !st.questionKey || !st.questionStartMs) {
+    // 型ズレに強くする（"1" と 1 の比較で弾かれないように）
+    if (!st || String(st.currentQuestion) !== String(qid) || !st.questionKey || !st.questionStartMs) {
       alert("まず同じQの「選択肢表示＆回答開始」を押してください");
       return;
     }
 
+    // まずは ranking 表示を最優先（失敗しても phase は進める）
     try {
-    const ans = await loadAnswers(st.questionKey);
+      const ans = await loadAnswers(st.questionKey);
 
-    const psnap = await FS.getDocs(playersCol());
-    const players = [];
-    psnap.forEach((d) => {
-      const p = d.data() || {};
-      players.push({ pid: d.id, name: p.name || d.id });
-    });
-
-    const correctList = [];
-    for (const p of players) {
-      const a = normalizeAnswerValue(ans[p.pid]);
-      if (a.option === correctIndex && a.answeredAtMs != null) {
-        const timeSec = (a.answeredAtMs - st.questionStartMs) / 1000;
-        correctList.push({ pid: p.pid, name: p.name, timeSec });
+      // 名前マップ（取れなくてもOK：取れなければ pid を表示）
+      const nameMap = new Map();
+      try {
+        const psnap = await FS.getDocs(playersCol());
+        psnap.forEach((d) => {
+          const p = d.data() || {};
+          nameMap.set(d.id, p.name || d.id);
+        });
+      } catch (e) {
+        console.warn("players read failed (use pid as name):", e);
       }
-    }
 
-    correctList.sort((a, b) => a.timeSec - b.timeSec);
-    const ranking = correctList.slice(0, 10).map((x, i) => ({
-      rank: i + 1,
-      name: x.name,
-      timeSec: Number(x.timeSec.toFixed(2)),
-    }));
+      const correctList = [];
+      for (const pid in ans) {
+        const a = normalizeAnswerValue(ans[pid]);
+        if (a.option === correctIndex && a.answeredAtMs != null) {
+          const timeSec = (a.answeredAtMs - st.questionStartMs) / 1000;
+          correctList.push({
+            pid,
+            name: nameMap.get(pid) || pid,
+            timeSec,
+          });
+        }
+      }
 
-    await setRoomState({
-      ...st,
-      phase: "ranking",
-      correct: correctIndex,
-      ranking,
-    });
+      correctList.sort((a, b) => a.timeSec - b.timeSec);
 
-    alert("正解者ランキングを表示しました");    } catch (e) {
-      console.error("ranking build failed:", e);
+      const ranking = correctList.slice(0, 10).map((x, i) => ({
+        rank: i + 1,
+        name: x.name,
+        timeSec: Number(x.timeSec.toFixed(2)),
+      }));
+
       await setRoomState({
         ...st,
         phase: "ranking",
         correct: correctIndex,
-        ranking: [],
+        ranking,
       });
+
+      alert("正解者ランキングを表示しました");
+      return;
+    } catch (e) {
+      console.error("ranking build failed:", e);
     }
 
+    // 失敗しても「ランキング画面」は出す
+    await setRoomState({
+      ...st,
+      phase: "ranking",
+      correct: correctIndex,
+      ranking: [],
+    });
+    alert("正解者ランキングを表示しました（空）");
   }
 
   async function admin_showFinalRanking() {
