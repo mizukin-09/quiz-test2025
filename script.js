@@ -85,6 +85,7 @@
       return {
         option: typeof v.option === "number" ? v.option : null,
         answeredAtMs: typeof v.answeredAtMs === "number" ? v.answeredAtMs : null,
+        name: typeof v.name === "string" ? v.name : null,
       };
     }
     return { option: null, answeredAtMs: null };
@@ -115,7 +116,19 @@
     const joinArea = document.getElementById("joinArea");
     if (!joinArea) return;
 
+    // 旧: HTML の onclick 依存だと「関数が見えない/読み込み失敗」で押しても反応しないことがあるため、
+    // ここで確実にイベントを結びます（念のため window へも公開）
     window.joinGame = joinGame;
+
+    const joinBtn = document.getElementById("joinBtn");
+    if (joinBtn) {
+      // HTML 側に onclick が残っていても二重発火しないようにする
+      joinBtn.onclick = null;
+      joinBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        joinGame();
+      });
+    }
 
     const nameInput = document.getElementById("nameInput");
     if (nameInput && playerName) nameInput.value = playerName;
@@ -133,30 +146,45 @@
     const name = (nameInput?.value || "").trim();
     if (!name) return alert("ニックネームを入力してください");
 
-    if (!playerId) {
-      playerId = makeId(12);
-      localStorage.setItem("playerId", playerId);
+    const joinBtn = document.getElementById("joinBtn");
+    if (joinBtn) joinBtn.disabled = true;
+
+    // 参加処理：players への書き込みが権限で弾かれても、回答参加自体は続行できるようにする
+    try {
+      if (!playerId) {
+        playerId = makeId(12);
+        localStorage.setItem("playerId", playerId);
+      }
+      playerName = name;
+      localStorage.setItem("playerName", name);
+
+      try {
+        await FS.setDoc(
+          playerRef(playerId),
+          {
+            name,
+            score: 0,
+            joinedAt: FS.serverTimestamp ? FS.serverTimestamp() : new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        // ここが失敗しても「参加」は続行（ランキングは answers 内の name から復元可能）
+        console.warn("player doc write failed; continue joining:", e);
+      }
+
+      document.getElementById("joinArea").style.display = "none";
+      const waitingArea = document.getElementById("waitingArea");
+      waitingArea.style.display = "block";
+      waitingArea.textContent = "司会の合図があるまでお待ちください…";
+
+      idxJoined = true;
+      startIndexRoomListener();
+    } catch (e) {
+      console.error("joinGame failed:", e);
+      alert("参加に失敗しました。ページを再読み込みして、もう一度お試しください。");
+      if (joinBtn) joinBtn.disabled = false;
     }
-    playerName = name;
-    localStorage.setItem("playerName", name);
-
-    await FS.setDoc(
-      playerRef(playerId),
-      {
-        name,
-        score: 0,
-        joinedAt: FS.serverTimestamp ? FS.serverTimestamp() : new Date().toISOString(),
-      },
-      { merge: true }
-    );
-
-    document.getElementById("joinArea").style.display = "none";
-    const waitingArea = document.getElementById("waitingArea");
-    waitingArea.style.display = "block";
-    waitingArea.textContent = "司会の合図があるまでお待ちください…";
-
-    idxJoined = true;
-    startIndexRoomListener();
   }
 
   function startIndexRoomListener() {
@@ -318,6 +346,7 @@
           [playerId]: {
             option: opt,
             answeredAtMs: nowMs(),
+            name: playerName || null,
           },
         },
         { merge: true }
@@ -833,6 +862,14 @@ async function admin_showRanking(qid, correctIndex) {
       const p = d.data() || {};
       players.push({ pid: d.id, name: p.name || d.id });
     });
+
+    // players が読めない（権限/空）場合は answers 側から参加者を復元
+    if (players.length === 0 && ans && typeof ans === "object") {
+      Object.keys(ans).forEach((pid) => {
+        const a = normalizeAnswerValue(ans[pid]);
+        players.push({ pid, name: a.name || pid });
+      });
+    }
 
     const correctList = [];
     for (const p of players) {
