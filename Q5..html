@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Image Page</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+
+    body{
+      font-family: system-ui, sans-serif;
+      padding: 32px;
+      color:#111;
+      background: #000 url("picture_quiz/bg_quiz.png") center center / cover no-repeat fixed;
+    }
+
+    /* 画像を「画面のど真ん中」に固定 */
+    .centerImage{
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+
+      /* 画面からはみ出さないように */
+      max-width: 92vw;
+      max-height: 92vh;
+
+      object-fit: contain;
+      filter: drop-shadow(0 18px 40px rgba(0,0,0,.35));
+    }
+  </style>
+</head>
+<body>
+  <!-- ここに表示したい画像のパスを入れてください -->
+  <!-- 例: src="./assets/title.png" -->
+  <img class="centerImage" src="picture_quiz\Q5.jpg" alt="Center Image" />
+</body>
+</html>
