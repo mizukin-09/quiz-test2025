@@ -23,6 +23,10 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const nowMs = () => Date.now();
 
+  // 参加ボタンが Firebase 初期化前に押されてもエラーにならないよう、先にグローバルへ公開
+  // （FS が未準備なら joinGame() 内で案内する）
+  window.joinGame = (...args) => joinGame(...args);
+
   function makeId(len = 12) {
     const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
     let s = "";
@@ -645,6 +649,8 @@
     window.admin_showVotes = admin_showVotes;
     window.admin_reveal = admin_reveal;
     window.admin_showRanking = admin_showRanking;
+    window.admin_revealAuto = admin_revealAuto;
+    window.admin_showRankingAuto = admin_showRankingAuto;
     window.admin_showFinalRanking = admin_showFinalRanking;
   }
 
@@ -730,6 +736,21 @@
     });
 
     alert("投票数を表示しました");
+  }
+
+
+  // DBの questions/{qid}.correct を読んでから正解発表する（admin.html用）
+  async function admin_revealAuto(qid) {
+    const q = await fetchQuestion(qid);
+    const correctIndex = typeof q.correct === "number" ? q.correct : 1;
+    return admin_reveal(qid, correctIndex);
+  }
+
+  // DBの questions/{qid}.correct を読んでからランキング表示する（admin.html用）
+  async function admin_showRankingAuto(qid) {
+    const q = await fetchQuestion(qid);
+    const correctIndex = typeof q.correct === "number" ? q.correct : 1;
+    return admin_showRanking(qid, correctIndex);
   }
 
   async function admin_reveal(qid, correctIndex) {
@@ -896,7 +917,6 @@
     initQuestionPage();
   });
 })();
-
 
 
 
